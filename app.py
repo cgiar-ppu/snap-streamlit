@@ -12,6 +12,7 @@ import re
 import pickle
 import concurrent.futures  # Import for parallel processing
 from typing import List
+import plotly.express as px
 
 # Import necessary libraries for embeddings, clustering, and summarization
 from sentence_transformers import SentenceTransformer
@@ -356,8 +357,8 @@ else:
         st.warning("Please upload an Excel file to proceed.")
 
 
-# Create tabs
-tab1, tab2, tab3, tab_help = st.tabs(["Semantic Search", "Clustering", "Summarization", "Help"])
+# Create tabs (adding the new "Internal Validation" tab)
+tab1, tab2, tab3, tab_help, tab_internal = st.tabs(["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"])
 
 # Help Tab
 with tab_help:
@@ -504,6 +505,8 @@ with tab1:
         st.warning("Please select a dataset to proceed and select text columns.")
 
 # Clustering Tab
+# Clustering Tab
+# Clustering Tab
 with tab2:
     st.header("Clustering")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
@@ -525,8 +528,8 @@ with tab2:
                 if not text_columns:
                     st.warning("No text columns selected. Please select text columns to embed before clustering.")
                 else:
+                    # Ensure embeddings are computed
                     if 'embeddings' not in st.session_state or st.session_state.get('last_text_columns') != text_columns:
-                        # Need to re-compute embeddings if not computed or if columns changed
                         df_full = st.session_state['df']
                         embeddings, embeddings_file = load_or_compute_embeddings(df_full, st.session_state.get('using_default_dataset', False), st.session_state.get('uploaded_file_name', None), text_columns)
                     else:
@@ -562,7 +565,6 @@ with tab2:
                                         if clustering_option == 'Semantic Search Results':
                                             st.session_state['clustered_data'] = dfc.copy()
                                         else:
-                                            # Add Topics to the filtered_df as well
                                             st.session_state['filtered_df'].loc[dfc.index, 'Topic'] = dfc['Topic']
 
                                         st.write("Clustering Results:")
@@ -583,41 +585,159 @@ with tab2:
                                         fig3 = topic_model.visualize_hierarchy()
                                         st.plotly_chart(fig3)
 
-                                        st.subheader("Topics per Class Visualization")
-                                        available_columns = dfc.columns.tolist()
-                                        class_column = st.selectbox("Select a column to use as classes for Topics per Class visualization:", available_columns)
-                                        if class_column:
-                                            try:
-                                                classes = dfc[class_column].astype(str).tolist()
-                                                topics_per_class = topic_model.topics_per_class(texts_cleaned, classes=classes)
-                                                fig4 = topic_model.visualize_topics_per_class(topics_per_class)
-                                                st.plotly_chart(fig4)
-                                            except Exception:
-                                                st.warning("Could not generate Topics per Class visualization.")
+                                        # Attempt to compute hierarchical topics
+                                        st.write("Computing Hierarchical Topics...")
+                                        hierarchy = topic_model.hierarchical_topics(texts_cleaned)
+                                        # Store hierarchy in session_state so it can be accessed in the Internal Validation tab
+                                        st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
+
+                                        # Treemap Visualization of Hierarchical Topics
+                                        st.subheader("Hierarchical Topic Treemap")
+                                        hierarchy = st.session_state.get('hierarchy', pd.DataFrame())
+                                        if hierarchy is not None and not hierarchy.empty:
+                                            # Assuming 'Topics' is already a list
+                                            parent_dict = {row.Parent_Name: row for _, row in hierarchy.iterrows()}
+
+                                            # Identify top-level parent: assume highest Parent_ID is top
+                                            root_row = hierarchy.iloc[hierarchy['Parent_ID'].argmax()]
+                                            root_name = root_row.Parent_Name
+                                            # If Topics is a list of topic IDs:
+                                            all_topics = root_row['Topics']
+                                            root_size = len(all_topics)
+
+                                            treemap_nodes = [{"names": "All Topics", "parents": "", "values": root_size}]
+
+                                            def build_nodes(name, parent_name):
+                                                """Recursively build treemap nodes from the hierarchy."""
+                                                if name in parent_dict:
+                                                    # This is a parent node
+                                                    row = parent_dict[name]
+                                                    node_topics = row['Topics']  # Already a list
+                                                    node_size = len(node_topics)
+
+                                                    treemap_nodes.append({
+                                                        "names": name,
+                                                        "parents": parent_name,
+                                                        "values": node_size
+                                                    })
+
+                                                    # Get children
+                                                    left_child = row['Child_Left_Name']
+                                                    right_child = row['Child_Right_Name']
+
+                                                    # Recurse on children
+                                                    build_nodes(left_child, name)
+                                                    build_nodes(right_child, name)
+
+                                                else:
+                                                    # This is a leaf node
+                                                    # We assume a leaf node corresponds to a single original topic
+                                                    treemap_nodes.append({
+                                                        "names": name,
+                                                        "parents": parent_name,
+                                                        "values": 1
+                                                    })
+
+                                            # Build the tree from the root parent
+                                            build_nodes(root_name, "All Topics")
+
+                                            # Convert to DataFrame and plot treemap
+                                            treemap_df = pd.DataFrame(treemap_nodes)
+                                            fig_treemap = px.treemap(treemap_df, names='names', parents='parents', values='values')
+                                            fig_treemap.update_traces(root_color="lightgrey")
+                                            fig_treemap.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+                                            st.plotly_chart(fig_treemap)
+
+                                        else:
+                                            st.warning("No hierarchical topic information available for Treemap.")
+
+                                        # Clusters per Year Visualization
+                                        st.subheader("Clusters per Year Visualization")
+                                        required_columns = ['Year', 'Topic', 'Result code']
+                                        missing_columns = [col for col in required_columns if col not in dfc.columns]
+                                        if missing_columns:
+                                            st.warning(f"The following required columns are missing from the dataset: {', '.join(missing_columns)}")
+                                        else:
+                                            if not np.issubdtype(dfc['Year'].dtype, np.number):
+                                                dfc['Year'] = pd.to_numeric(dfc['Year'], errors='coerce').astype('Int64')
+                                            dfc_clean = dfc.dropna(subset=['Year', 'Topic', 'Result code'])
+                                            unique_years = sorted(dfc_clean['Year'].unique())
+                                            st.write(f"Data contains the following years: {unique_years}")
+
+                                            if dfc_clean.empty:
+                                                st.warning("No valid data available for 'Year', 'Topic', and 'Result code' to generate the visualization.")
+                                            else:
+                                                df_agg = dfc_clean.groupby(['Year', 'Topic']).agg({'Result code': 'count'}).reset_index().rename(columns={'Result code': 'Count'})
+                                                st.write("Aggregated Data for Visualization:")
+                                                st.dataframe(df_agg)
+
+                                                unique_topics = df_agg['Topic'].unique()
+                                                num_topics = len(unique_topics)
+                                                angles = np.linspace(0, 2 * np.pi, num_topics, endpoint=False)
+                                                radius = 1
+                                                positions = {topic: (np.cos(angle)*radius, np.sin(angle)*radius) for topic, angle in zip(unique_topics, angles)}
+                                                df_agg['x_pos'] = df_agg['Topic'].map(lambda t: positions[t][0])
+                                                df_agg['y_pos'] = df_agg['Topic'].map(lambda t: positions[t][1])
+
+                                                fig = px.scatter(
+                                                    df_agg,
+                                                    x="x_pos",
+                                                    y="y_pos",
+                                                    size="Count",
+                                                    color="Topic",
+                                                    animation_frame="Year",
+                                                    animation_group="Topic",
+                                                    hover_name="Topic",
+                                                    size_max=60,
+                                                    title="Clusters per Year - Animated Bubble Chart",
+                                                    labels={"x_pos": "", "y_pos": "", "Count": "Result Code Count"},
+                                                    category_orders={"Year": unique_years},
+                                                    template="plotly_white"
+                                                )
+
+                                                fig.update_xaxes(visible=False)
+                                                fig.update_yaxes(visible=False)
+                                                fig.update_layout(showlegend=True, title_x=0.5)
+                                                fig.layout.updatemenus = [
+                                                    dict(
+                                                        type="buttons",
+                                                        buttons=[
+                                                            dict(label="Play",
+                                                                 method="animate",
+                                                                 args=[None, {"frame": {"duration": 1000, "redraw": True},
+                                                                              "fromcurrent": True, "transition": {"duration": 500, "easing": "quadratic-in-out"}}]),
+                                                            dict(label="Pause",
+                                                                 method="animate",
+                                                                 args=[[None], {"frame": {"duration": 0, "redraw": False},
+                                                                                "mode": "immediate",
+                                                                                "transition": {"duration": 0}}])
+                                                        ],
+                                                        direction="left",
+                                                        pad={"r": 10, "t": 87},
+                                                        showactive=False,
+                                                        x=0.1,
+                                                        xanchor="right",
+                                                        y=0,
+                                                        yanchor="top"
+                                                    )
+                                                ]
+                                                fig.update_traces(marker=dict(line=dict(width=2, color='DarkSlateGrey')), selector=dict(mode='markers'))
+                                                st.plotly_chart(fig, use_container_width=True)
 
                                     except Exception as e:
                                         st.error(f"An error occurred during clustering: {e}")
-                            else:
-                                if ('topic_model' in st.session_state) and (('clustered_data' in st.session_state and not st.session_state['clustered_data'].empty) or ('Topic' in st.session_state['filtered_df'].columns)):
-                                    st.write("Clustering results are available from a previous run.")
-                                    if clustering_option == 'Semantic Search Results' and 'clustered_data' in st.session_state:
-                                        dfc = st.session_state['clustered_data']
-                                    else:
-                                        dfc = st.session_state['filtered_df']
+                                        # Store exception details in session state to view in internal validation tab
+                                        st.session_state['clustering_error'] = str(e)
 
-                                    if 'Topic' in dfc.columns:
-                                        columns_to_display = [col for col in dfc.columns if col != 'text']
-                                        st.write(dfc[columns_to_display])
-                                    else:
-                                        st.write("No topics found. Please run clustering.")
                     else:
                         st.warning("No embeddings available. Please select text columns and ensure embeddings are computed.")
-            else:
-                st.warning("No data available for clustering.")
         else:
-            st.warning("The filtered dataset is empty. Please adjust your filters.")
+            st.warning("No data available for clustering.")
     else:
         st.warning("Please select a dataset to proceed and select text columns.")
+
+
+
 
 # Summarization Tab
 with tab3:
@@ -747,3 +867,43 @@ with tab3:
             st.warning("The filtered dataset is empty. Please adjust your filters.")
     else:
         st.warning("Please select a dataset and select text columns to proceed.")
+
+# Internal Validation Tab
+with tab_internal:
+    st.header("Internal Validation & Debugging")
+
+    # Display hierarchical topics DataFrame if available
+    hierarchy = st.session_state.get('hierarchy', pd.DataFrame())
+    st.subheader("Hierarchical Topics DataFrame")
+    if not hierarchy.empty:
+        st.dataframe(hierarchy)
+    else:
+        st.write("No hierarchical topics data available.")
+
+    # Display clustering error details if available
+    error_msg = st.session_state.get('clustering_error', None)
+    if error_msg:
+        st.subheader("Clustering Error Details")
+        st.write(error_msg)
+
+    # Display other internal variables
+    st.subheader("Internal Variables")
+    st.write("Min Cluster Size:", st.session_state.get('min_cluster_size_val', 'Not set'))
+    st.write("Text Columns:", st.session_state.get('text_columns', 'Not set'))
+    st.write("Using Default Dataset:", st.session_state.get('using_default_dataset', 'Not set'))
+    st.write("Last Text Columns Used for Embeddings:", st.session_state.get('last_text_columns', 'Not set'))
+
+    # If needed, display filtered_df, clustered_data, embeddings shape, etc.
+    filtered_df = st.session_state.get('filtered_df', pd.DataFrame())
+    st.subheader("Filtered DF")
+    st.write(filtered_df.head())
+
+    clustered_data = st.session_state.get('clustered_data', pd.DataFrame())
+    st.subheader("Clustered Data")
+    st.write(clustered_data.head())
+
+    if 'embeddings' in st.session_state and st.session_state['embeddings'] is not None:
+        st.subheader("Embeddings Information")
+        st.write("Shape of Embeddings:", st.session_state['embeddings'].shape)
+    else:
+        st.write("No embeddings data available.")
