@@ -179,7 +179,7 @@ tinycss2==1.4.0
 tokenizers==0.20.1
 toml==0.10.2
 tomlkit==0.13.2
-torch
+#torch
 tornado==6.4.1
 tqdm==4.66.6
 traitlets==5.14.3

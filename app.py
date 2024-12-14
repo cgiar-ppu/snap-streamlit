@@ -25,7 +25,7 @@ from nltk.tokenize import word_tokenize
 
 # For summarization
 from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
 device = 'cpu'
