@@ -31,10 +31,10 @@ from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, H
 device = 'cpu'
 
 def init_nltk_resources():
-    try:
-        nltk.data.find('corpora/stopwords')
-    except LookupError:
-        nltk.download('stopwords')
+    # try:
+    #     nltk.data.find('corpora/stopwords')
+    # except LookupError:
+    #     nltk.download('stopwords')
     try:
         nltk.data.find('tokenizers/punkt')
     except LookupError:
@@ -310,6 +310,23 @@ if dataset_option == 'PRMS 2022+2023 QAed':
 
         st.write("Filtered Data Preview:")
         st.write(filtered_df.head())
+
+        # Add total count of results
+        st.write(f"Total number of results: {len(filtered_df)}")
+
+        # Provide download button for filtered data
+        output = io.BytesIO()
+        writer = pd.ExcelWriter(output, engine='openpyxl')
+        filtered_df.to_excel(writer, index=False)
+        writer.close()
+        processed_data = output.getvalue()
+
+        st.download_button(
+            label="Download Filtered Data",
+            data=processed_data,
+            file_name='filtered_data.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     else:
         st.warning("Please ensure the default dataset exists in the 'input' directory.")
 else:
@@ -351,6 +368,22 @@ else:
             st.session_state['filtered_df'] = filtered_df
             st.write("Filtered Data Preview:")
             st.write(filtered_df.head())
+
+            # Add total count and download button
+            st.write(f"Total number of results: {len(filtered_df)}")
+
+            output = io.BytesIO()
+            writer = pd.ExcelWriter(output, engine='openpyxl')
+            filtered_df.to_excel(writer, index=False)
+            writer.close()
+            processed_data = output.getvalue()
+
+            st.download_button(
+                label="Download Filtered Data",
+                data=processed_data,
+                file_name='filtered_data.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
         else:
             st.warning("Failed to load the uploaded dataset.")
     else:
@@ -452,6 +485,11 @@ with tab1:
 
                                 if len(above_threshold_indices) == 0:
                                     st.warning("No results found above the similarity threshold.")
+                                    # Clear previous results if any
+                                    if 'search_results' in st.session_state:
+                                        del st.session_state['search_results']
+                                    if 'search_results_processed_data' in st.session_state:
+                                        del st.session_state['search_results_processed_data']
                                 else:
                                     selected_indices = filtered_indices[above_threshold_indices]
                                     results = filtered_df.loc[selected_indices].copy()
@@ -472,31 +510,56 @@ with tab1:
 
                                     if results.empty:
                                         st.warning("No results found after applying negative/include keyword filters.")
+                                        # Clear previous results if any
+                                        if 'search_results' in st.session_state:
+                                            del st.session_state['search_results']
+                                        if 'search_results_processed_data' in st.session_state:
+                                            del st.session_state['search_results_processed_data']
                                     else:
+                                        # Store results in session state (DO NOT display them here to avoid duplicate)
                                         st.session_state['search_results'] = results.copy()
-                                        st.write("Search Results:")
-                                        columns_to_display = [c for c in results.columns if c not in ['similarity_score']] + ['similarity_score']
-                                        st.write(results[columns_to_display])
-
-                                        # Download results
-                                        csv = results.to_csv(index=False)
-                                        b64 = base64.b64encode(csv.encode()).decode()
-                                        href = f'<a href="data:file/csv;base64,{b64}" download="search_results.csv">Download Full Results CSV</a>'
-                                        st.markdown(href, unsafe_allow_html=True)
+                                        # Generate processed_data for download
+                                        output = io.BytesIO()
+                                        writer = pd.ExcelWriter(output, engine='openpyxl')
+                                        results.to_excel(writer, index=False)
+                                        writer.close()
+                                        processed_data = output.getvalue()
+                                        st.session_state['search_results_processed_data'] = processed_data  # Store in session_state
                         else:
                             st.warning("Please enter a query to search.")
-                    else:
-                        if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
-                            st.write("Previous Search Results:")
-                            results = st.session_state['search_results']
-                            columns_to_display = [c for c in results.columns if c not in ['similarity_score']] + ['similarity_score']
-                            st.write(results[columns_to_display])
 
-                            # Download previous results
-                            csv = results.to_csv(index=False)
-                            b64 = base64.b64encode(csv.encode()).decode()
-                            href = f'<a href="data:file/csv;base64,{b64}" download="search_results.csv">Download Full Results CSV</a>'
-                            st.markdown(href, unsafe_allow_html=True)
+                    # Now, outside the 'if st.button("Search")', display results if available
+                    if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+                        st.write("Search Results:")
+                        results = st.session_state['search_results']
+                        columns_to_display = [c for c in results.columns if c not in ['similarity_score']] + ['similarity_score']
+                        st.write(results[columns_to_display])
+
+                        # Display total number of results
+                        st.write(f"Total number of results: {len(results)}")
+
+                        # Retrieve processed_data from session_state
+                        processed_data = st.session_state.get('search_results_processed_data', None)
+                        if processed_data is None:
+                            # Regenerate processed_data if not available
+                            output = io.BytesIO()
+                            writer = pd.ExcelWriter(output, engine='openpyxl')
+                            results.to_excel(writer, index=False)
+                            writer.close()
+                            processed_data = output.getvalue()
+                            st.session_state['search_results_processed_data'] = processed_data
+
+                        # Download results as Excel
+                        st.download_button(
+                            label="Download Full Results",
+                            data=processed_data,
+                            file_name='search_results.xlsx',
+                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            key='download_search_results'
+                        )
+                    else:
+                        st.info("No search results to display. Please enter a query and click 'Search'.")
+
                 else:
                     st.warning("No embeddings available because no text columns were chosen.")
         else:
@@ -543,12 +606,7 @@ with tab2:
                         if len(dfc['text']) == 0:
                             st.warning("No text data available for clustering.")
                         else:
-                            stop_words = set(stopwords.words('english'))
-                            texts_cleaned = []
-                            for text in dfc['text'].tolist():
-                                word_tokens = word_tokenize(text)
-                                filtered_text = ' '.join([word for word in word_tokens if word.lower() not in stop_words])
-                                texts_cleaned.append(filtered_text)
+                            texts_cleaned = dfc['text'].tolist()
 
                             selected_indices = dfc.index
                             embeddings_clustering = embeddings[selected_indices]
@@ -662,12 +720,13 @@ with tab2:
                                                 dfc['Year'] = pd.to_numeric(dfc['Year'], errors='coerce').astype('Int64')
                                             dfc_clean = dfc.dropna(subset=['Year', 'Topic', 'Result code'])
                                             unique_years = sorted(dfc_clean['Year'].unique())
-                                            st.write(f"Data contains the following years: {unique_years}")
+                                            #st.write(f"Data contains the following years: {unique_years}")
 
                                             if dfc_clean.empty:
                                                 st.warning("No valid data available for 'Year', 'Topic', and 'Result code' to generate the visualization.")
                                             else:
                                                 df_agg = dfc_clean.groupby(['Year', 'Topic']).agg({'Result code': 'count'}).reset_index().rename(columns={'Result code': 'Count'})
+                                                df_agg = df_agg.sort_values(by='Count', ascending=False)
                                                 st.write("Aggregated Data for Visualization:")
                                                 st.dataframe(df_agg)
 
