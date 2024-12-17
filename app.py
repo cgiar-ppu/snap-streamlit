@@ -93,11 +93,13 @@ def load_or_compute_embeddings(df, using_default_dataset, uploaded_file_name=Non
     df_fill = df.fillna("")
     texts = df_fill[text_columns].astype(str).agg(' '.join, axis=1).tolist()
 
+    # Check session_state cache
     if 'embeddings' in st.session_state and 'embeddings_file' in st.session_state and 'last_text_columns' in st.session_state:
         # If columns are the same and file name matches, reuse
         if st.session_state['last_text_columns'] == text_columns and len(st.session_state['embeddings']) == len(texts):
             return st.session_state['embeddings'], st.session_state['embeddings_file']
 
+    # If embeddings file exists on disk
     if os.path.exists(embeddings_file):
         with open(embeddings_file, 'rb') as f:
             embeddings = pickle.load(f)
@@ -110,6 +112,7 @@ def load_or_compute_embeddings(df, using_default_dataset, uploaded_file_name=Non
         else:
             st.write("Pre-calculated embeddings do not match current data. Regenerating...")
 
+    # Compute embeddings
     st.write("Generating embeddings...")
     model = get_embedding_model()
     embeddings = generate_embeddings(texts, model)
@@ -310,6 +313,21 @@ if dataset_option == 'PRMS 2022+2023 QAed':
 
         st.write("Filtered Data Preview:")
         st.write(filtered_df.head())
+
+        st.write(f"Total number of results: {len(filtered_df)}")
+
+        output = io.BytesIO()
+        writer = pd.ExcelWriter(output, engine='openpyxl')
+        filtered_df.to_excel(writer, index=False)
+        writer.close()
+        processed_data = output.getvalue()
+
+        st.download_button(
+            label="Download Filtered Data",
+            data=processed_data,
+            file_name='filtered_data.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     else:
         st.warning("Please ensure the default dataset exists in the 'input' directory.")
 else:
@@ -351,11 +369,8 @@ else:
             st.session_state['filtered_df'] = filtered_df
             st.write("Filtered Data Preview:")
             st.write(filtered_df.head())
-        else:
-            st.warning("Failed to load the uploaded dataset.")
-    else:
-        st.warning("Please upload an Excel file to proceed.")
 
+            st.write(f"Total number of results: {len(filtered_df)}")
 
 # Create tabs (adding the new "Internal Validation" tab)
 tab1, tab2, tab3, tab_help, tab_internal = st.tabs(["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"])
