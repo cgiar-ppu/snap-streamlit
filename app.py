@@ -392,7 +392,7 @@ else:
     else:
         st.warning("Please upload an Excel file to proceed.")
 
-            st.write(f"Total number of results: {len(filtered_df)}")
+    st.write(f"Total number of results: {len(filtered_df)}")
 
 # Create tabs (adding the new "Internal Validation" tab)
 tab1, tab2, tab3, tab_help, tab_internal = st.tabs(["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"])
