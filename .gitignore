@@ -1,2 +1,3 @@
-venv
 notes.md
+.DS_Store
+.venv/
