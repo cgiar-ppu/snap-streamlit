@@ -1,6 +1,13 @@
 # app.py
 
 import streamlit as st
+# Set page config first, before any other st commands
+st.set_page_config(page_title="SNAP", layout="wide")
+
+# Add warning filters
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, message='.*torch.classes.*')
+
 import pandas as pd
 import numpy as np
 import os
@@ -13,6 +20,7 @@ import pickle
 import concurrent.futures  # Import for parallel processing
 from typing import List
 import plotly.express as px
+import torch
 
 # Import necessary libraries for embeddings, clustering, and summarization
 from sentence_transformers import SentenceTransformer
@@ -28,7 +36,14 @@ from langchain.chains import LLMChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
-device = 'cpu'
+# Determine device - will use GPU if available, otherwise CPU
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# Log device being used - helpful for debugging
+if device == 'cuda':
+    st.sidebar.success(f"Using GPU: {torch.cuda.get_device_name(0)}")
+else:
+    st.sidebar.info("Using CPU")
 
 def init_nltk_resources():
     # try:
@@ -45,8 +60,6 @@ def init_nltk_resources():
         nltk.download('punkt_tab')
 
 init_nltk_resources()
-
-st.set_page_config(page_title="SNAP", layout="wide")
 
 st.sidebar.title("Data Selection")
 dataset_option = st.sidebar.selectbox('Select Dataset', ('PRMS 2022+2023 QAed', 'Upload my dataset'))
@@ -618,10 +631,19 @@ with tab2:
                             if st.button("Run Clustering"):
                                 with st.spinner("Performing clustering..."):
                                     sentence_model = get_embedding_model()
-                                    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size_val, metric='euclidean', cluster_selection_method='eom')
-                                    topic_model = BERTopic(embedding_model=sentence_model, hdbscan_model=hdbscan_model)
+                                    # Note: HDBSCAN only runs on CPU, so we need to ensure embeddings are on CPU
+                                    embeddings_for_clustering = embeddings_clustering.cpu().numpy() if torch.is_tensor(embeddings_clustering) else embeddings_clustering
+                                    
+                                    # Initialize HDBSCAN (CPU-only operation)
+                                    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size_val, 
+                                                          metric='euclidean', 
+                                                          cluster_selection_method='eom')
+                                    
+                                    topic_model = BERTopic(embedding_model=sentence_model, 
+                                                         hdbscan_model=hdbscan_model)
                                     try:
-                                        topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_clustering)
+                                        # Ensure embeddings are on CPU for clustering
+                                        topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
                                         dfc['Topic'] = topics
                                         st.session_state['topic_model'] = topic_model
                                         if clustering_option == 'Semantic Search Results':
@@ -798,9 +820,6 @@ with tab2:
             st.warning("No data available for clustering.")
     else:
         st.warning("Please select a dataset to proceed and select text columns.")
-
-
-
 
 # Summarization Tab
 with tab3:
