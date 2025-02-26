@@ -270,14 +270,14 @@ if dataset_option == 'PRMS 2022+2023 QAed':
                 sel_sdg = []
 
         # Additional filter columns
-        st.write("**Additional Filter Columns**")
+        st.write("**Additional Filters**")
         all_columns = df.columns.tolist()
         # Remove standard filter columns to avoid duplication
         standard_filter_cols = ['Regions', 'Countries', 'Primary center', 'Impact Area Target', 'SDG targets']
         # This is just a set to ensure no duplicates.
         add_filter_candidates = [c for c in all_columns if c not in standard_filter_cols]
 
-        selected_additional_cols = st.multiselect("Select additional columns to filter by:", add_filter_candidates, default=st.session_state.get('additional_filters_selected', []))
+        selected_additional_cols = st.multiselect("Select additional columns from your dataset to use as filters:", add_filter_candidates, default=st.session_state.get('additional_filters_selected', []))
         st.session_state['additional_filters_selected'] = selected_additional_cols
 
         # For each chosen additional filter column, show a multiselect of unique values
@@ -293,7 +293,12 @@ if dataset_option == 'PRMS 2022+2023 QAed':
 
         # Text columns selection
         st.write("**Select Text Columns for Embedding**")
-        text_columns_selected = st.multiselect("Text Columns:", all_columns, default=['Title','Description'] if 'Title' in df.columns and 'Description' in df.columns else [])
+        text_columns_selected = st.multiselect(
+            "Text Columns:",
+            all_columns,
+            default=['Title','Description'] if 'Title' in df.columns and 'Description' in df.columns else [],
+            help="Choose columns containing text that you want to search through or analyze. Selected columns will be used for semantic search (finding similar content) and clustering (grouping similar documents). If multiple columns are selected, their text will be combined. It is necessary to select at least one column from the dataset as it will contain the text to be searched through."
+        )
         st.session_state['text_columns'] = text_columns_selected
 
         # Apply filters to create filtered_df
@@ -363,8 +368,8 @@ else:
             text_columns_selected = st.multiselect("Text Columns:", df_cols, default=df_cols[:1] if df_cols else [])
             st.session_state['text_columns'] = text_columns_selected
 
-            st.write("**Select Additional Filter Columns**")
-            selected_additional_cols = st.multiselect("Additional Filter Columns:", df_cols, default=[])
+            st.write("**Additional Filters**")
+            selected_additional_cols = st.multiselect("Select additional columns from your dataset to use as filters:", df_cols, default=[])
             st.session_state['additional_filters_selected'] = selected_additional_cols
 
             for col_name in selected_additional_cols:
@@ -468,6 +473,58 @@ with tab1:
     st.header("Semantic Search")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
         if not st.session_state['filtered_df'].empty:
+            # Add explanation about semantic search
+            with st.expander("ℹ️ How Semantic Search Works"):
+                st.markdown("""
+                ### Understanding Semantic Search
+
+                Unlike traditional keyword search that looks for exact matches, semantic search understands the meaning and context of your query. Here's how it works:
+
+                1. **Query Processing**:
+                   - Your search query is converted into a numerical representation (embedding) that captures its meaning
+                   - Example: Searching for "Climate Smart Villages" will understand the concept, not just the words
+                   - Related terms like "sustainable communities", "resilient farming", or "agricultural adaptation" might be found even if they don't contain the exact words
+
+                2. **Similarity Matching**:
+                   - Documents are ranked by how closely their meaning matches your query
+                   - The similarity threshold controls how strict this matching is
+                   - Higher threshold (e.g., 0.8) = more precise but fewer results
+                   - Lower threshold (e.g., 0.3) = more results but might be less relevant
+
+                3. **Advanced Features**:
+                   - **Negative Keywords**: Use to explicitly exclude documents containing certain terms
+                   - **Required Keywords**: Ensure specific terms appear in the results
+                   - These work as traditional keyword filters after the semantic search
+
+                ### Search Tips
+
+                - **Phrase Queries**: Enter complete phrases for better context
+                  - "Climate Smart Villages" (as one concept)
+                  - Better than separate terms: "climate", "smart", "villages"
+
+                - **Descriptive Queries**: Add context for better results
+                  - Instead of: "water"
+                  - Better: "water management in agriculture"
+
+                - **Conceptual Queries**: Focus on concepts rather than specific terms
+                  - Instead of: "increased yield"
+                  - Better: "agricultural productivity improvements"
+
+                ### Example Searches
+
+                1. **Query**: "Climate Smart Villages"
+                   - Will find: Documents about climate-resilient communities, adaptive farming practices, sustainable village development
+                   - Even if they don't use these exact words
+
+                2. **Query**: "Gender equality in agriculture"
+                   - Will find: Women's empowerment in farming, female farmer initiatives, gender-inclusive rural development
+                   - Related concepts are captured semantically
+
+                3. **Query**: "Sustainable water management"
+                   + Required keyword: "irrigation"
+                   - Combines semantic understanding of water sustainability with specific irrigation focus
+                """)
+            
             df = st.session_state['df']  # full dataset
             filtered_df = st.session_state['filtered_df']
 
@@ -482,12 +539,16 @@ with tab1:
                     embeddings = st.session_state['embeddings']
 
                 if embeddings is not None:
-                    query = st.text_input("Enter your search query:")
-                    negative_keywords = st.text_input("Exclude documents containing these words (comma-separated):")
-                    include_keywords = st.text_input("Include only documents containing these words (comma-separated):")
-                    similarity_threshold = st.slider("Similarity threshold", 0.0, 1.0, 0.35)
+                    # Create two columns, form will be in the left column
+                    left_col, right_col = st.columns(2)
+                    with left_col:
+                        with st.form("search_parameters"):
+                            query = st.text_input("Enter your search query:")
+                            include_keywords = st.text_input("Include only documents containing these words (comma-separated):")
+                            similarity_threshold = st.slider("Similarity threshold", 0.0, 1.0, 0.35)
+                            submitted = st.form_submit_button("Search")
 
-                    if st.button("Search"):
+                    if submitted:
                         if query.strip():
                             with st.spinner("Performing Semantic Search..."):
                                 model = get_embedding_model()
@@ -498,6 +559,63 @@ with tab1:
                                 filtered_indices = filtered_df.index
                                 filtered_embeddings = embeddings[filtered_indices]
                                 similarities = cosine_similarity(query_embedding, filtered_embeddings)
+
+                                # Create histogram of similarity scores
+                                fig = px.histogram(
+                                    x=similarities[0],
+                                    nbins=30,
+                                    labels={'x': 'Similarity Score', 'y': 'Number of Documents'},
+                                    title='Distribution of Similarity Scores'
+                                )
+                                
+                                # Add vertical line for threshold
+                                fig.add_vline(
+                                    x=similarity_threshold,
+                                    line_dash="dash",
+                                    line_color="red",
+                                    annotation_text=f"Threshold: {similarity_threshold:.2f}",
+                                    annotation_position="top"
+                                )
+                                
+                                # Update layout with improved styling
+                                fig.update_layout(
+                                    title_x=0.5,
+                                    showlegend=False,
+                                    margin=dict(t=50, l=50, r=50, b=50),
+                                    hoverlabel=dict(
+                                        bgcolor="black",
+                                        font_size=14,
+                                        font_color="white"
+                                    ),
+                                    hovermode='x',
+                                    xaxis=dict(
+                                        showgrid=False,
+                                        zeroline=False
+                                    ),
+                                    yaxis=dict(
+                                        showgrid=False,
+                                        zeroline=False
+                                    )
+                                )
+                                
+                                # Update bar style with borders
+                                fig.update_traces(
+                                    hovertemplate="Similarity Score: %{x:.3f}<br>Count: %{y}",
+                                    marker_line_width=1,
+                                    marker_line_color="rgb(150,150,150)",
+                                    opacity=0.8
+                                )
+                                
+                                # Display plot and explanation
+                                st.write("### Similarity Score Distribution")
+                                st.write("""
+                                This histogram shows how many documents fall into each similarity score range:
+                                - Documents to the right of the red line (threshold) will be included in results
+                                - A good threshold balances precision (high similarity) with recall (enough results)
+                                - Adjust the threshold to include more results (move left) or be more selective (move right)
+                                """)
+                                st.plotly_chart(fig)
+
                                 above_threshold_indices = np.where(similarities[0] > similarity_threshold)[0]
 
                                 if len(above_threshold_indices) == 0:
@@ -513,12 +631,6 @@ with tab1:
                                     results['similarity_score'] = similarities[0][above_threshold_indices]
                                     results = results.sort_values(by='similarity_score', ascending=False)
 
-                                    # Apply negative keyword filter
-                                    if negative_keywords.strip():
-                                        neg_words = [w.strip().lower() for w in negative_keywords.split(',') if w.strip()]
-                                        if neg_words:
-                                            results = results[results.apply(lambda row: all(w not in (' '.join(row.astype(str)).lower()) for w in neg_words), axis=1)]
-
                                     # Apply include keywords filter
                                     if include_keywords.strip():
                                         inc_words = [w.strip().lower() for w in include_keywords.split(',') if w.strip()]
@@ -526,14 +638,14 @@ with tab1:
                                             results = results[results.apply(lambda row: all(w in (' '.join(row.astype(str)).lower()) for w in inc_words), axis=1)]
 
                                     if results.empty:
-                                        st.warning("No results found after applying negative/include keyword filters.")
+                                        st.warning("No results found after applying keyword filters.")
                                         # Clear previous results if any
                                         if 'search_results' in st.session_state:
                                             del st.session_state['search_results']
                                         if 'search_results_processed_data' in st.session_state:
                                             del st.session_state['search_results_processed_data']
                                     else:
-                                        # Store results in session state (DO NOT display them here to avoid duplicate)
+                                        # Store results in session state
                                         st.session_state['search_results'] = results.copy()
                                         # Generate processed_data for download
                                         output = io.BytesIO()
@@ -541,7 +653,7 @@ with tab1:
                                         results.to_excel(writer, index=False)
                                         writer.close()
                                         processed_data = output.getvalue()
-                                        st.session_state['search_results_processed_data'] = processed_data  # Store in session_state
+                                        st.session_state['search_results_processed_data'] = processed_data
                         else:
                             st.warning("Please enter a query to search.")
 
@@ -585,14 +697,96 @@ with tab1:
         st.warning("Please select a dataset to proceed and select text columns.")
 
 # Clustering Tab
-# Clustering Tab
-# Clustering Tab
 with tab2:
     st.header("Clustering")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
         if not st.session_state['filtered_df'].empty:
-            clustering_option = st.radio("Select data for clustering:", ('Full Dataset', 'Semantic Search Results'))
-            min_cluster_size_val = st.slider("Min Cluster Size", 2, 50, 5, help="Minimum size of each cluster in HDBSCAN.")
+            # Add explanation about clustering
+            with st.expander("ℹ️ How Clustering Works"):
+                st.markdown("""
+                ### Understanding Document Clustering
+
+                Clustering automatically groups similar documents together, helping you discover patterns and themes in your data. Here's how it works:
+
+                1. **Cluster Formation**:
+                   - Documents are grouped based on their semantic similarity
+                   - Each cluster represents a distinct theme or topic
+                   - Documents that are too different from others may remain unclustered (labeled as -1)
+                   - The "Min Cluster Size" parameter controls how clusters are formed
+
+                2. **Interpreting Results**:
+                   - Each cluster is assigned a number (e.g., 0, 1, 2...)
+                   - Cluster -1 contains "outlier" documents that didn't fit well in other clusters
+                   - The size of each cluster indicates how common that theme is
+                   - Keywords for each cluster show the main topics/concepts
+
+                3. **Visualizations**:
+                   - **Intertopic Distance Map**: Shows how clusters relate to each other
+                     - Closer clusters are more semantically similar
+                     - Size of circles indicates number of documents
+                     - Hover to see top terms for each cluster
+                   
+                   - **Topic Document Visualization**: Shows individual documents
+                     - Each point is a document
+                     - Colors indicate cluster membership
+                     - Distance between points shows similarity
+                   
+                   - **Topic Hierarchy**: Shows how topics are related
+                     - Tree structure shows topic relationships
+                     - Parent topics contain broader themes
+                     - Child topics show more specific sub-themes
+
+                ### How to Use Clusters
+
+                1. **Exploration**:
+                   - Use clusters to discover main themes in your data
+                   - Look for unexpected groupings that might reveal insights
+                   - Identify outliers that might need special attention
+
+                2. **Analysis**:
+                   - Compare cluster sizes to understand theme distribution
+                   - Examine keywords to understand what defines each cluster
+                   - Use hierarchy to see how themes are nested
+
+                3. **Practical Applications**:
+                   - Generate summaries for specific clusters
+                   - Focus detailed analysis on clusters of interest
+                   - Use clusters to organize and categorize documents
+                   - Identify gaps or overlaps in your dataset
+
+                ### Tips for Better Results
+
+                - **Adjust Min Cluster Size**:
+                  - Larger values (15-20): Fewer, broader clusters
+                  - Smaller values (2-5): More specific, smaller clusters
+                  - Balance between too many small clusters and too few large ones
+
+                - **Choose Data Wisely**:
+                  - Cluster full dataset for overall themes
+                  - Cluster search results for focused analysis
+                  - More documents generally give better clusters
+
+                - **Interpret with Context**:
+                  - Consider your domain knowledge
+                  - Look for patterns across multiple visualizations
+                  - Use cluster insights to guide further analysis
+                """)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                with st.form("clustering_parameters"):
+                    clustering_option = st.radio("Select data for clustering:", ('Full Dataset', 'Semantic Search Results'))
+                    if 'min_cluster_size' not in st.session_state:
+                        st.session_state.min_cluster_size = 5
+                    min_cluster_size_val = st.slider(
+                        "Min Cluster Size",
+                        min_value=2,
+                        max_value=50,
+                        value=st.session_state.min_cluster_size,
+                        help="Minimum size of each cluster in HDBSCAN; In other words, it's the minimum number of documents/texts that must be grouped together to form a valid cluster.\n\n- A larger value (e.g., 20) will result in fewer, larger clusters\n- A smaller value (e.g., 2-5) will allow for more clusters, including smaller ones\n- Documents that don't fit into any cluster meeting this minimum size requirement are labeled as noise (typically assigned to cluster -1)",
+                        key="min_cluster_size"
+                    )
+                    submitted = st.form_submit_button("Run Clustering")
 
             if clustering_option == 'Semantic Search Results':
                 if st.session_state.get('search_results') is not None and not st.session_state['search_results'].empty:
@@ -623,12 +817,18 @@ with tab2:
                         if len(dfc['text']) == 0:
                             st.warning("No text data available for clustering.")
                         else:
-                            texts_cleaned = dfc['text'].tolist()
+                            # Clean texts by removing stop words
+                            stop_words = set(stopwords.words('english'))
+                            texts_cleaned = []
+                            for text in dfc['text'].tolist():
+                                word_tokens = word_tokenize(text)
+                                filtered_text = ' '.join([word for word in word_tokens if word.lower() not in stop_words])
+                                texts_cleaned.append(filtered_text)
 
                             selected_indices = dfc.index
                             embeddings_clustering = embeddings[selected_indices]
 
-                            if st.button("Run Clustering"):
+                            if submitted:
                                 with st.spinner("Performing clustering..."):
                                     sentence_model = get_embedding_model()
                                     # Note: HDBSCAN only runs on CPU, so we need to ensure embeddings are on CPU
@@ -646,12 +846,54 @@ with tab2:
                                         topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
                                         dfc['Topic'] = topics
                                         st.session_state['topic_model'] = topic_model
-                                        if clustering_option == 'Semantic Search Results':
-                                            st.session_state['clustered_data'] = dfc.copy()
-                                        else:
+                                        # Store the clustered data in session state
+                                        st.session_state['clustered_data'] = dfc.copy()
+                                        # Also update the filtered_df with topics
+                                        if clustering_option == 'Full Dataset':
                                             st.session_state['filtered_df'].loc[dfc.index, 'Topic'] = dfc['Topic']
 
-                                        st.write("Clustering Results:")
+                                        # Add topic overview table first
+                                        st.subheader("Topic Overview")
+                                        
+                                        # Get unique topics and their counts
+                                        topic_counts = dfc['Topic'].value_counts().sort_index()
+                                        
+                                        # Create overview data
+                                        overview_data = []
+                                        for topic_id in topic_counts.index:
+                                            # Get top words for the topic
+                                            top_words = topic_model.get_topic(topic_id)
+                                            # Format keywords and their weights
+                                            if top_words:
+                                                keywords = ", ".join([f"{word} ({weight:.3f})" for word, weight in top_words[:5]])
+                                            else:
+                                                keywords = "N/A"
+                                            
+                                            # Add to overview data
+                                            overview_data.append({
+                                                "Topic": int(topic_id),
+                                                "Size": topic_counts[topic_id],
+                                                "% of Total": f"{(topic_counts[topic_id] / len(dfc) * 100):.1f}%",
+                                                "Top Keywords (with weights)": keywords
+                                            })
+                                        
+                                        # Create and display overview DataFrame
+                                        overview_df = pd.DataFrame(overview_data)
+                                        st.dataframe(
+                                            overview_df,
+                                            column_config={
+                                                "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                                                "Size": st.column_config.NumberColumn("Size", help="Number of documents in this topic"),
+                                                "% of Total": st.column_config.TextColumn("% of Total", help="Percentage of total documents"),
+                                                "Top Keywords (with weights)": st.column_config.TextColumn(
+                                                    "Top Keywords (with weights)",
+                                                    help="Top 5 keywords and their importance weights for this topic"
+                                                )
+                                            }
+                                        )
+
+                                        # Then show full clustering results
+                                        st.subheader("Clustering Results")
                                         columns_to_display = [col for col in dfc.columns if col not in ['text']]
                                         st.write(dfc[columns_to_display])
 
@@ -659,6 +901,14 @@ with tab2:
 
                                         st.subheader("Intertopic Distance Map")
                                         fig1 = topic_model.visualize_topics()
+                                        # Modify only the tooltip style for better readability
+                                        fig1.update_traces(
+                                            hoverlabel=dict(
+                                                bgcolor='black',
+                                                font_size=14,
+                                                font_color='white'
+                                            )
+                                        )
                                         st.plotly_chart(fig1)
 
                                         st.subheader("Topic Document Visualization")
@@ -735,80 +985,6 @@ with tab2:
                                         else:
                                             st.warning("No hierarchical topic information available for Treemap.")
 
-                                        # Clusters per Year Visualization
-                                        st.subheader("Clusters per Year Visualization")
-                                        required_columns = ['Year', 'Topic', 'Result code']
-                                        missing_columns = [col for col in required_columns if col not in dfc.columns]
-                                        if missing_columns:
-                                            st.warning(f"The following required columns are missing from the dataset: {', '.join(missing_columns)}")
-                                        else:
-                                            if not np.issubdtype(dfc['Year'].dtype, np.number):
-                                                dfc['Year'] = pd.to_numeric(dfc['Year'], errors='coerce').astype('Int64')
-                                            dfc_clean = dfc.dropna(subset=['Year', 'Topic', 'Result code'])
-                                            unique_years = sorted(dfc_clean['Year'].unique())
-                                            #st.write(f"Data contains the following years: {unique_years}")
-
-                                            if dfc_clean.empty:
-                                                st.warning("No valid data available for 'Year', 'Topic', and 'Result code' to generate the visualization.")
-                                            else:
-                                                df_agg = dfc_clean.groupby(['Year', 'Topic']).agg({'Result code': 'count'}).reset_index().rename(columns={'Result code': 'Count'})
-                                                df_agg = df_agg.sort_values(by='Count', ascending=False)
-                                                st.write("Aggregated Data for Visualization:")
-                                                st.dataframe(df_agg)
-
-                                                unique_topics = df_agg['Topic'].unique()
-                                                num_topics = len(unique_topics)
-                                                angles = np.linspace(0, 2 * np.pi, num_topics, endpoint=False)
-                                                radius = 1
-                                                positions = {topic: (np.cos(angle)*radius, np.sin(angle)*radius) for topic, angle in zip(unique_topics, angles)}
-                                                df_agg['x_pos'] = df_agg['Topic'].map(lambda t: positions[t][0])
-                                                df_agg['y_pos'] = df_agg['Topic'].map(lambda t: positions[t][1])
-
-                                                fig = px.scatter(
-                                                    df_agg,
-                                                    x="x_pos",
-                                                    y="y_pos",
-                                                    size="Count",
-                                                    color="Topic",
-                                                    animation_frame="Year",
-                                                    animation_group="Topic",
-                                                    hover_name="Topic",
-                                                    size_max=60,
-                                                    title="Clusters per Year - Animated Bubble Chart",
-                                                    labels={"x_pos": "", "y_pos": "", "Count": "Result Code Count"},
-                                                    category_orders={"Year": unique_years},
-                                                    template="plotly_white"
-                                                )
-
-                                                fig.update_xaxes(visible=False)
-                                                fig.update_yaxes(visible=False)
-                                                fig.update_layout(showlegend=True, title_x=0.5)
-                                                fig.layout.updatemenus = [
-                                                    dict(
-                                                        type="buttons",
-                                                        buttons=[
-                                                            dict(label="Play",
-                                                                 method="animate",
-                                                                 args=[None, {"frame": {"duration": 1000, "redraw": True},
-                                                                              "fromcurrent": True, "transition": {"duration": 500, "easing": "quadratic-in-out"}}]),
-                                                            dict(label="Pause",
-                                                                 method="animate",
-                                                                 args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                                                                "mode": "immediate",
-                                                                                "transition": {"duration": 0}}])
-                                                        ],
-                                                        direction="left",
-                                                        pad={"r": 10, "t": 87},
-                                                        showactive=False,
-                                                        x=0.1,
-                                                        xanchor="right",
-                                                        y=0,
-                                                        yanchor="top"
-                                                    )
-                                                ]
-                                                fig.update_traces(marker=dict(line=dict(width=2, color='DarkSlateGrey')), selector=dict(mode='markers'))
-                                                st.plotly_chart(fig, use_container_width=True)
-
                                     except Exception as e:
                                         st.error(f"An error occurred during clustering: {e}")
                                         # Store exception details in session state to view in internal validation tab
@@ -839,6 +1015,9 @@ with tab3:
                 else:
                     if 'Topic' in df_summ.columns and 'topic_model' in st.session_state:
                         topic_model = st.session_state['topic_model']
+                        # Ensure we're using the correct DataFrame with topics
+                        if 'clustered_data' in st.session_state and not st.session_state['clustered_data'].empty:
+                            df_summ = st.session_state['clustered_data'].copy()
                         topics = df_summ['Topic'].unique()
                         # Prepare text column if not already
                         df_summ_fill = df_summ.fillna("")
@@ -860,12 +1039,33 @@ with tab3:
                         st.write("Available Clusters for Summarization:")
                         st.dataframe(cluster_df)
 
-                        selected_topics = st.multiselect("Select clusters to summarize", cluster_df["Topic"].tolist())
+                        left_col, right_col = st.columns(2)
+                        with left_col:
+                            # Initialize summary scope in session state if not present
+                            if 'summary_scope' not in st.session_state:
+                                st.session_state.summary_scope = "All clusters"
+                            
+                            # Place the radio button outside the form
+                            st.session_state.summary_scope = st.radio(
+                                "Generate summaries for:",
+                                ["All clusters", "Specific clusters"]
+                            )
 
-                        temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
-                        max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
+                            with st.form("summarization_parameters"):
+                                # Convert topics to integers for display
+                                topic_options = [int(t) for t in cluster_df["Topic"].tolist()]
+                                
+                                # Show cluster selection based on summary scope
+                                if st.session_state.summary_scope == "Specific clusters":
+                                    selected_topics = st.multiselect("Select clusters to summarize", topic_options)
+                                else:
+                                    selected_topics = topic_options  # Use all topics
 
-                        if st.button("Generate Summaries"):
+                                temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
+                                max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
+                                submitted = st.form_submit_button("Generate Summaries")
+
+                        if submitted:
                             system_prompt = """
             You are an expert summarizer skilled in creating concise and relevant summaries.
             You will be given text and an objective context. Please produce a clear, cohesive, and thematically relevant summary.
@@ -880,7 +1080,9 @@ with tab3:
                                 llm = ChatOpenAI(api_key=openai_api_key, model_name='gpt-4o', temperature=temperature, max_tokens=max_tokens)
 
                                 if selected_topics:
-                                    df_to_summarize = df_summ[df_summ['Topic'].isin(selected_topics)]
+                                    # Convert selected topics back to float for DataFrame filtering
+                                    selected_topics_float = [float(t) for t in selected_topics]
+                                    df_to_summarize = df_summ[df_summ['Topic'].isin(selected_topics_float)]
                                 else:
                                     df_to_summarize = df_summ
 
