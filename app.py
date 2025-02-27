@@ -137,12 +137,6 @@ def load_or_compute_embeddings(df, using_default_dataset, uploaded_file_name=Non
     return embeddings, embeddings_file
 
 def reset_filters():
-    st.session_state['selected_regions'] = []
-    st.session_state['selected_countries'] = []
-    st.session_state['selected_centers'] = []
-    st.session_state['selected_impact_area'] = []
-    st.session_state['selected_sdg_targets'] = []
-    st.session_state['additional_filters'] = {}
     st.session_state['selected_additional_filters'] = {}
 
 if dataset_option == 'PRMS 2022+2023 QAed':
@@ -153,134 +147,16 @@ if dataset_option == 'PRMS 2022+2023 QAed':
         st.session_state['using_default_dataset'] = True
         st.write("Using default dataset:")
 
-        # Load filter options for standard filters if columns exist
-        filters_dir = os.path.join(os.path.dirname(__file__), 'filters')
-
+        # Get all columns for filtering
         df_cols = df.columns.tolist()
 
-        # Safe check if columns exist
-        def safe_read_filter_options(file_name, col_name):
-            path = os.path.join(filters_dir, file_name)
-            if os.path.exists(path) and col_name in df_cols:
-                with open(path, 'r') as f:
-                    opts = [line.strip() for line in f.readlines()]
-                return opts
-            else:
-                return []
-
-        regions_options_raw = safe_read_filter_options('regions.txt', 'Regions')
-        countries_options_raw = safe_read_filter_options('countries.txt', 'Countries')
-        centers_options_raw = safe_read_filter_options('centers.txt', 'Primary center')
-        impact_area_options_raw = safe_read_filter_options('impact_area.txt', 'Impact Area Target')
-        sdg_target_options_raw = safe_read_filter_options('sdg_target.txt', 'SDG targets')
-
-        def get_counts(df, column, options):
-            if column not in df.columns:
-                return options, {o:o for o in options}
-            counts = df[column].value_counts()
-            mapped = []
-            mapping_dict = {}
-            for opt in options:
-                c = counts[opt] if opt in counts else 0
-                mapped.append(f"{opt} ({c})")
-                mapping_dict[f"{opt} ({c})"] = opt
-            return mapped, mapping_dict
-
-        if 'selected_regions' not in st.session_state:
-            st.session_state['selected_regions'] = []
-        if 'selected_countries' not in st.session_state:
-            st.session_state['selected_countries'] = []
-        if 'selected_centers' not in st.session_state:
-            st.session_state['selected_centers'] = []
-        if 'selected_impact_area' not in st.session_state:
-            st.session_state['selected_impact_area'] = []
-        if 'selected_sdg_targets' not in st.session_state:
-            st.session_state['selected_sdg_targets'] = []
-        if 'selected_additional_filters' not in st.session_state:
-            st.session_state['selected_additional_filters'] = {}
-
-        # Maps for standard filters
-        if regions_options_raw:
-            regions_options_mapped, regions_map = get_counts(df, 'Regions', regions_options_raw)
-        else:
-            regions_options_mapped, regions_map = [], {}
-
-        if countries_options_raw:
-            countries_options_mapped, countries_map = get_counts(df, 'Countries', countries_options_raw)
-        else:
-            countries_options_mapped, countries_map = [], {}
-
-        if centers_options_raw:
-            centers_options_mapped, centers_map = get_counts(df, 'Primary center', centers_options_raw)
-        else:
-            centers_options_mapped, centers_map = [], {}
-
-        if impact_area_options_raw:
-            impact_area_options_mapped, impact_area_map = get_counts(df, 'Impact Area Target', impact_area_options_raw)
-        else:
-            impact_area_options_mapped, impact_area_map = [], {}
-
-        if sdg_target_options_raw:
-            sdg_target_options_mapped, sdg_target_map = get_counts(df, 'SDG targets', sdg_target_options_raw)
-        else:
-            sdg_target_options_mapped, sdg_target_map = [], {}
-
-        with st.sidebar:
-            st.write("**Filters**")
-            if st.button("Reset Filters"):
-                reset_filters()
-
-        # Standard filters UI
-        col1, col2 = st.columns(2)
-        with col1:
-            if regions_options_mapped:
-                sel_reg = st.multiselect("Regions", regions_options_mapped, default=st.session_state['selected_regions'])
-                st.session_state['selected_regions'] = sel_reg
-            else:
-                sel_reg = []
-
-        with col2:
-            if countries_options_mapped:
-                sel_cnt = st.multiselect("Countries", countries_options_mapped, default=st.session_state['selected_countries'])
-                st.session_state['selected_countries'] = sel_cnt
-            else:
-                sel_cnt = []
-
-        col3, col4 = st.columns(2)
-        with col3:
-            if centers_options_mapped:
-                sel_ctr = st.multiselect("Primary Center", centers_options_mapped, default=st.session_state['selected_centers'])
-                st.session_state['selected_centers'] = sel_ctr
-            else:
-                sel_ctr = []
-
-        with col4:
-            if impact_area_options_mapped:
-                sel_ia = st.multiselect("Impact Area Target(s)", impact_area_options_mapped, default=st.session_state['selected_impact_area'])
-                st.session_state['selected_impact_area'] = sel_ia
-            else:
-                sel_ia = []
-
-        col5 = st.columns(1)
-        with col5[0]:
-            if sdg_target_options_mapped:
-                sel_sdg = st.multiselect("SDG Target(s)", sdg_target_options_mapped, default=st.session_state['selected_sdg_targets'])
-                st.session_state['selected_sdg_targets'] = sel_sdg
-            else:
-                sel_sdg = []
-
         # Additional filter columns
-        st.write("**Additional Filters**")
+        st.write("**Select Filters**")
         all_columns = df.columns.tolist()
-        # Remove standard filter columns to avoid duplication
-        standard_filter_cols = ['Regions', 'Countries', 'Primary center', 'Impact Area Target', 'SDG targets']
-        # This is just a set to ensure no duplicates.
-        add_filter_candidates = [c for c in all_columns if c not in standard_filter_cols]
-
-        selected_additional_cols = st.multiselect("Select additional columns from your dataset to use as filters:", add_filter_candidates, default=st.session_state.get('additional_filters_selected', []))
+        selected_additional_cols = st.multiselect("Select columns from your dataset to use as filters:", all_columns, default=st.session_state.get('additional_filters_selected', []))
         st.session_state['additional_filters_selected'] = selected_additional_cols
 
-        # For each chosen additional filter column, show a multiselect of unique values
+        # For each chosen filter column, show a multiselect of unique values
         for col_name in selected_additional_cols:
             # If not already in session state, initialize
             if f'selected_filter_{col_name}' not in st.session_state:
@@ -303,23 +179,6 @@ if dataset_option == 'PRMS 2022+2023 QAed':
 
         # Apply filters to create filtered_df
         filtered_df = df.copy()
-
-        # Apply standard filters if columns exist
-        if 'Regions' in df_cols and st.session_state['selected_regions']:
-            reg_values = [regions_map[v] for v in st.session_state['selected_regions']]
-            filtered_df = filtered_df[filtered_df['Regions'].isin(reg_values)]
-        if 'Countries' in df_cols and st.session_state['selected_countries']:
-            cnt_values = [countries_map[v] for v in st.session_state['selected_countries']]
-            filtered_df = filtered_df[filtered_df['Countries'].isin(cnt_values)]
-        if 'Primary center' in df_cols and st.session_state['selected_centers']:
-            ctr_values = [centers_map[v] for v in st.session_state['selected_centers']]
-            filtered_df = filtered_df[filtered_df['Primary center'].isin(ctr_values)]
-        if 'Impact Area Target' in df_cols and st.session_state['selected_impact_area']:
-            ia_values = [impact_area_map[v] for v in st.session_state['selected_impact_area']]
-            filtered_df = filtered_df[filtered_df['Impact Area Target'].isin(ia_values)]
-        if 'SDG targets' in df_cols and st.session_state['selected_sdg_targets']:
-            sdg_values = [sdg_target_map[v] for v in st.session_state['selected_sdg_targets']]
-            filtered_df = filtered_df[filtered_df['SDG targets'].isin(sdg_values)]
 
         # Apply additional filters
         for col_name in selected_additional_cols:
