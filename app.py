@@ -46,10 +46,10 @@ else:
     st.sidebar.info("Using CPU")
 
 def init_nltk_resources():
-    # try:
-    #     nltk.data.find('corpora/stopwords')
-    # except LookupError:
-    #     nltk.download('stopwords')
+    try:
+        nltk.data.find('corpora/stopwords')
+    except LookupError:
+        nltk.download('stopwords')
     try:
         nltk.data.find('tokenizers/punkt')
     except LookupError:
