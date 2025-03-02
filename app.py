@@ -36,6 +36,139 @@ from langchain.chains import LLMChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
+# Define the function to process summaries and add references
+def add_references_to_summary(summary, source_df, reference_column, url_column=None, llm=None):
+    """
+    Add references to a summary by identifying which parts of the summary come from which source documents.
+    
+    Args:
+        summary (str): The summary text to enhance with references
+        source_df (DataFrame): DataFrame containing the source documents
+        reference_column (str): Column name to use for reference IDs
+        url_column (str, optional): Column name containing URLs for hyperlinks
+        llm (LLM, optional): Language model for source attribution
+        
+    Returns:
+        str: Enhanced summary with references as HTML
+    """
+    if summary.strip() == "" or source_df.empty or reference_column not in source_df.columns:
+        return summary
+    
+    # If no LLM is provided, we can't do source attribution
+    if llm is None:
+        return summary
+    
+    # Split the summary into sentences for processing
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', summary)
+    
+    # Prepare source texts with their reference IDs
+    source_texts = []
+    reference_ids = []
+    urls = []
+    
+    for _, row in source_df.iterrows():
+        if 'text' in row and pd.notna(row['text']) and reference_column in row and pd.notna(row[reference_column]):
+            source_texts.append(str(row['text']))
+            reference_ids.append(str(row[reference_column]))
+            if url_column and url_column in row and pd.notna(row[url_column]):
+                urls.append(str(row[url_column]))
+            else:
+                urls.append(None)
+    
+    # If we have no valid sources, return the original summary
+    if not source_texts:
+        return summary
+    
+    # Create a mapping between URLs and reference IDs if needed
+    url_map = {}
+    if url_column:
+        for ref_id, url in zip(reference_ids, urls):
+            if url:
+                url_map[ref_id] = url
+    
+    # Process each sentence to find its source
+    enhanced_sentences = []
+    
+    # Define the system prompt for source attribution
+    system_prompt = """
+    You are an expert at identifying the source of information. You will be given:
+    1. A sentence from a summary
+    2. A list of source texts with their IDs
+    
+    Your task is to identify which source text(s) the sentence most likely came from.
+    Return ONLY the IDs of the source texts that contributed to the sentence, separated by commas.
+    If you cannot confidently attribute the sentence to any source, return "unknown".
+    """
+    
+    # Process in batches to avoid too many API calls
+    batch_size = 5
+    for i in range(0, len(sentences), batch_size):
+        batch = sentences[i:i+batch_size]
+        batch_results = []
+        
+        for sentence in batch:
+            if sentence.strip():
+                # Create the prompt for this sentence
+                user_prompt = f"""
+                Sentence: {sentence}
+                
+                Source texts:
+                {chr(10).join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
+                
+                Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
+                """
+                
+                # Create the messages for the chat
+                system_message = SystemMessagePromptTemplate.from_template(system_prompt)
+                human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
+                
+                # Get the source attribution
+                try:
+                    chain = LLMChain(llm=llm, prompt=chat_prompt)
+                    response = chain.run(user_prompt=user_prompt)
+                    source_ids = response.strip()
+                    
+                    # Clean up the response
+                    if source_ids.lower() == "unknown":
+                        source_ids = ""
+                    else:
+                        # Extract just the IDs, handling various formats the LLM might return
+                        source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
+                        source_ids = re.sub(r'\s+', '', source_ids)
+                    
+                    batch_results.append((sentence, source_ids))
+                except Exception as e:
+                    # If there's an error, just use the sentence without attribution
+                    batch_results.append((sentence, ""))
+            else:
+                batch_results.append((sentence, ""))
+        
+        # Process the results for this batch
+        for sentence, source_ids in batch_results:
+            if source_ids:
+                # Split multiple IDs if present
+                ids = [id.strip() for id in source_ids.split(',')]
+                
+                # Format the references
+                ref_parts = []
+                for id in ids:
+                    if id in url_map and url_map[id]:
+                        ref_parts.append(f'<a href="{url_map[id]}" target="_blank">{id}</a>')
+                    else:
+                        ref_parts.append(id)
+                
+                ref_string = ", ".join(ref_parts)
+                enhanced_sentence = f"{sentence} [{ref_string}]"
+                enhanced_sentences.append(enhanced_sentence)
+            else:
+                enhanced_sentences.append(sentence)
+    
+    # Combine the enhanced sentences back into a summary
+    enhanced_summary = " ".join(enhanced_sentences)
+    return enhanced_summary
+
 # Determine device - will use GPU if available, otherwise CPU
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -922,6 +1055,82 @@ with tab3:
 
                                 temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
                                 max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
+                                
+                                # Add options for enhanced summaries with references
+                                st.write("### Enhanced Summary Options")
+                                
+                                # Initialize enable_references in session state if not present
+                                if 'enable_references' not in st.session_state:
+                                    st.session_state.enable_references = False
+                                    st.session_state.reference_id_column = None
+                                    st.session_state.has_url_column = False
+                                    st.session_state.url_column = None
+                                
+                                # Get all available columns for reference selection
+                                available_columns = df_summ.columns.tolist()
+                                # Filter out some columns that wouldn't make sense as references
+                                filtered_columns = [col for col in available_columns if col not in ['text', 'Topic', 'similarity_score']]
+                                
+                                # Option to enable references
+                                st.session_state.enable_references = st.checkbox(
+                                    "Enable references in summaries", 
+                                    value=st.session_state.enable_references,
+                                    help="Add references to the source documents in the summaries"
+                                )
+                                
+                                # Always show reference options, but disable them if references are not enabled
+                                reference_id_column = st.selectbox(
+                                    "Select column to use as reference ID:", 
+                                    filtered_columns,
+                                    index=filtered_columns.index(st.session_state.reference_id_column) if st.session_state.reference_id_column in filtered_columns else 0,
+                                    help="This column will be used to identify the source of each part of the summary",
+                                    disabled=not st.session_state.enable_references
+                                )
+                                
+                                # Store the selected column in session state
+                                if st.session_state.enable_references:
+                                    st.session_state.reference_id_column = reference_id_column
+                                
+                                # Option to select a URL column for hyperlinking
+                                url_columns = [col for col in filtered_columns if 'url' in col.lower() or 'link' in col.lower()]
+                                if url_columns:
+                                    default_url_column = url_columns[0]
+                                else:
+                                    default_url_column = None
+                                
+                                has_url_column = st.checkbox(
+                                    "Add hyperlinks to references", 
+                                    value=st.session_state.has_url_column if st.session_state.enable_references else bool(default_url_column),
+                                    disabled=not st.session_state.enable_references
+                                )
+                                
+                                # Store the checkbox state in session state
+                                if st.session_state.enable_references:
+                                    st.session_state.has_url_column = has_url_column
+                                
+                                # URL column selection
+                                if has_url_column:
+                                    url_column_index = 0
+                                    if st.session_state.url_column in filtered_columns:
+                                        url_column_index = filtered_columns.index(st.session_state.url_column)
+                                    elif default_url_column in filtered_columns:
+                                        url_column_index = filtered_columns.index(default_url_column)
+                                    
+                                    url_column = st.selectbox(
+                                        "Select column containing URLs:", 
+                                        filtered_columns,
+                                        index=url_column_index,
+                                        help="URLs from this column will be used to create hyperlinks in the references",
+                                        disabled=not st.session_state.enable_references
+                                    )
+                                    
+                                    # Store the selected URL column in session state
+                                    if st.session_state.enable_references:
+                                        st.session_state.url_column = url_column
+                                else:
+                                    url_column = None
+                                    st.session_state.url_column = None
+                                
                                 submitted = st.form_submit_button("Generate Summaries")
 
                         if submitted:
@@ -958,12 +1167,31 @@ with tab3:
                                         chain = LLMChain(llm=llm, prompt=chat_prompt)
                                         response = chain.run(user_prompt=user_prompt)
                                     high_level_summary = response.strip()
-                                    st.write("### High-Level Summary:")
-                                    st.write(high_level_summary)
+                                    
+                                    # Process the high-level summary with references if enabled
+                                    if st.session_state.enable_references:
+                                        with st.spinner("Adding references to high-level summary..."):
+                                            enhanced_summary = add_references_to_summary(
+                                                high_level_summary, 
+                                                df_to_summarize, 
+                                                st.session_state.reference_id_column,
+                                                st.session_state.url_column if st.session_state.has_url_column else None,
+                                                llm
+                                            )
+                                            st.write("### High-Level Summary (with references):")
+                                            st.markdown(enhanced_summary, unsafe_allow_html=True)
+                                            
+                                            # Also show the original summary
+                                            with st.expander("View original summary (without references)"):
+                                                st.write(high_level_summary)
+                                    else:
+                                        st.write("### High-Level Summary:")
+                                        st.write(high_level_summary)
 
                                     # Summaries per cluster
                                     if selected_topics:
                                         summaries = []
+                                        enhanced_summaries = []
                                         grouped_list = list(df_to_summarize.groupby('Topic'))
                                         grouped_list = [g for g in grouped_list if g[0] in selected_topics]
 
@@ -983,7 +1211,21 @@ with tab3:
                                                 chain = LLMChain(llm=llm, prompt=chat_prompt)
                                                 response = chain.run(user_prompt=user_prompt)
                                                 summary = response.strip()
-                                                return {'Topic': topic, 'Summary': summary}
+                                                
+                                                result = {'Topic': topic, 'Summary': summary}
+                                                
+                                                # Add enhanced summary with references if enabled
+                                                if st.session_state.enable_references:
+                                                    enhanced_summary = add_references_to_summary(
+                                                        summary, 
+                                                        group, 
+                                                        st.session_state.reference_id_column,
+                                                        st.session_state.url_column if st.session_state.has_url_column else None,
+                                                        llm
+                                                    )
+                                                    result['Enhanced_Summary'] = enhanced_summary
+                                                
+                                                return result
 
                                             with st.spinner("Summarizing each selected cluster..."):
                                                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -996,9 +1238,27 @@ with tab3:
 
                                             if summaries:
                                                 summary_df = pd.DataFrame(summaries)
-                                                st.write("### Summaries per Cluster:")
-                                                st.write(summary_df)
-                                                csv = summary_df.to_csv(index=False)
+                                                
+                                                if st.session_state.enable_references and 'Enhanced_Summary' in summary_df.columns:
+                                                    st.write("### Summaries per Cluster (with references):")
+                                                    # Display enhanced summaries with HTML rendering
+                                                    for _, row in summary_df.iterrows():
+                                                        st.write(f"**Topic {int(row['Topic'])}**")
+                                                        st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
+                                                        st.write("---")
+                                                    
+                                                    # Also provide the original summaries in the dataframe
+                                                    with st.expander("View all summaries in table format"):
+                                                        # Remove the HTML-formatted enhanced summaries from the display dataframe
+                                                        display_df = summary_df[['Topic', 'Summary']]
+                                                        st.write(display_df)
+                                                else:
+                                                    st.write("### Summaries per Cluster:")
+                                                    st.write(summary_df)
+                                                
+                                                # Prepare CSV for download (without HTML formatting)
+                                                download_df = summary_df[['Topic', 'Summary']]
+                                                csv = download_df.to_csv(index=False)
                                                 b64 = base64.b64encode(csv.encode()).decode()
                                                 href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
                                                 st.markdown(href, unsafe_allow_html=True)
