@@ -36,139 +36,6 @@ from langchain.chains import LLMChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
-# Define the function to process summaries and add references
-def add_references_to_summary(summary, source_df, reference_column, url_column=None, llm=None):
-    """
-    Add references to a summary by identifying which parts of the summary come from which source documents.
-    
-    Args:
-        summary (str): The summary text to enhance with references
-        source_df (DataFrame): DataFrame containing the source documents
-        reference_column (str): Column name to use for reference IDs
-        url_column (str, optional): Column name containing URLs for hyperlinks
-        llm (LLM, optional): Language model for source attribution
-        
-    Returns:
-        str: Enhanced summary with references as HTML
-    """
-    if summary.strip() == "" or source_df.empty or reference_column not in source_df.columns:
-        return summary
-    
-    # If no LLM is provided, we can't do source attribution
-    if llm is None:
-        return summary
-    
-    # Split the summary into sentences for processing
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', summary)
-    
-    # Prepare source texts with their reference IDs
-    source_texts = []
-    reference_ids = []
-    urls = []
-    
-    for _, row in source_df.iterrows():
-        if 'text' in row and pd.notna(row['text']) and reference_column in row and pd.notna(row[reference_column]):
-            source_texts.append(str(row['text']))
-            reference_ids.append(str(row[reference_column]))
-            if url_column and url_column in row and pd.notna(row[url_column]):
-                urls.append(str(row[url_column]))
-            else:
-                urls.append(None)
-    
-    # If we have no valid sources, return the original summary
-    if not source_texts:
-        return summary
-    
-    # Create a mapping between URLs and reference IDs if needed
-    url_map = {}
-    if url_column:
-        for ref_id, url in zip(reference_ids, urls):
-            if url:
-                url_map[ref_id] = url
-    
-    # Process each sentence to find its source
-    enhanced_sentences = []
-    
-    # Define the system prompt for source attribution
-    system_prompt = """
-    You are an expert at identifying the source of information. You will be given:
-    1. A sentence from a summary
-    2. A list of source texts with their IDs
-    
-    Your task is to identify which source text(s) the sentence most likely came from.
-    Return ONLY the IDs of the source texts that contributed to the sentence, separated by commas.
-    If you cannot confidently attribute the sentence to any source, return "unknown".
-    """
-    
-    # Process in batches to avoid too many API calls
-    batch_size = 5
-    for i in range(0, len(sentences), batch_size):
-        batch = sentences[i:i+batch_size]
-        batch_results = []
-        
-        for sentence in batch:
-            if sentence.strip():
-                # Create the prompt for this sentence
-                user_prompt = f"""
-                Sentence: {sentence}
-                
-                Source texts:
-                {chr(10).join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
-                
-                Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
-                """
-                
-                # Create the messages for the chat
-                system_message = SystemMessagePromptTemplate.from_template(system_prompt)
-                human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
-                
-                # Get the source attribution
-                try:
-                    chain = LLMChain(llm=llm, prompt=chat_prompt)
-                    response = chain.run(user_prompt=user_prompt)
-                    source_ids = response.strip()
-                    
-                    # Clean up the response
-                    if source_ids.lower() == "unknown":
-                        source_ids = ""
-                    else:
-                        # Extract just the IDs, handling various formats the LLM might return
-                        source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
-                        source_ids = re.sub(r'\s+', '', source_ids)
-                    
-                    batch_results.append((sentence, source_ids))
-                except Exception as e:
-                    # If there's an error, just use the sentence without attribution
-                    batch_results.append((sentence, ""))
-            else:
-                batch_results.append((sentence, ""))
-        
-        # Process the results for this batch
-        for sentence, source_ids in batch_results:
-            if source_ids:
-                # Split multiple IDs if present
-                ids = [id.strip() for id in source_ids.split(',')]
-                
-                # Format the references
-                ref_parts = []
-                for id in ids:
-                    if id in url_map and url_map[id]:
-                        ref_parts.append(f'<a href="{url_map[id]}" target="_blank">{id}</a>')
-                    else:
-                        ref_parts.append(id)
-                
-                ref_string = ", ".join(ref_parts)
-                enhanced_sentence = f"{sentence} [{ref_string}]"
-                enhanced_sentences.append(enhanced_sentence)
-            else:
-                enhanced_sentences.append(sentence)
-    
-    # Combine the enhanced sentences back into a summary
-    enhanced_summary = " ".join(enhanced_sentences)
-    return enhanced_summary
-
 # Determine device - will use GPU if available, otherwise CPU
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -284,24 +151,50 @@ if dataset_option == 'PRMS 2022+2023 QAed':
         df_cols = df.columns.tolist()
 
         # Additional filter columns
-        st.write("**Select Filters**")
-        all_columns = df.columns.tolist()
-        selected_additional_cols = st.multiselect("Select columns from your dataset to use as filters:", all_columns, default=st.session_state.get('additional_filters_selected', []))
-        st.session_state['additional_filters_selected'] = selected_additional_cols
+        st.subheader("Select Filters")
+        
+        # Initialize session state for filters if not exists
+        if 'additional_filters_selected' not in st.session_state:
+            st.session_state['additional_filters_selected'] = []
+        if 'filter_values' not in st.session_state:
+            st.session_state['filter_values'] = {}
 
-        # For each chosen filter column, show a multiselect of unique values
-        for col_name in selected_additional_cols:
-            # If not already in session state, initialize
-            if f'selected_filter_{col_name}' not in st.session_state:
-                st.session_state[f'selected_filter_{col_name}'] = []
-            unique_vals = df[col_name].dropna().unique().tolist()
-            # Sort for consistency
-            unique_vals = sorted(unique_vals)
-            selected_vals = st.multiselect(f"Filter by {col_name}", options=unique_vals, default=st.session_state[f'selected_filter_{col_name}'])
-            st.session_state[f'selected_filter_{col_name}'] = selected_vals
+        with st.form("filter_selection_form"):
+            all_columns = df.columns.tolist()
+            selected_additional_cols = st.multiselect(
+                "Select columns from your dataset to use as filters:",
+                all_columns,
+                default=st.session_state['additional_filters_selected']
+            )
+            add_filters_submitted = st.form_submit_button("Add Additional Filters")
+            
+        if add_filters_submitted:
+            # Only update if there's a change
+            if selected_additional_cols != st.session_state['additional_filters_selected']:
+                st.session_state['additional_filters_selected'] = selected_additional_cols
+                # Reset values for removed columns
+                st.session_state['filter_values'] = {
+                    k: v for k, v in st.session_state['filter_values'].items() 
+                    if k in selected_additional_cols
+                }
+
+        # Show dynamic filters in a new form if there are any selected columns
+        if st.session_state['additional_filters_selected']:
+            st.subheader("Apply Filters")
+            with st.form("apply_filters_form"):
+                for col_name in st.session_state['additional_filters_selected']:
+                    unique_vals = sorted(df[col_name].dropna().unique().tolist())
+                    selected_vals = st.multiselect(
+                        f"Filter by {col_name}",
+                        options=unique_vals,
+                        default=st.session_state['filter_values'].get(col_name, [])
+                    )
+                    st.session_state['filter_values'][col_name] = selected_vals
+                
+                apply_filters_submitted = st.form_submit_button("Apply Filters to Dataset")
 
         # Text columns selection
-        st.write("**Select Text Columns for Embedding**")
+        st.subheader("**Select Text Columns for Embedding**")
         text_columns_selected = st.multiselect(
             "Text Columns:",
             all_columns,
@@ -313,33 +206,57 @@ if dataset_option == 'PRMS 2022+2023 QAed':
         # Apply filters to create filtered_df
         filtered_df = df.copy()
 
-        # Apply additional filters
-        for col_name in selected_additional_cols:
-            selected_vals = st.session_state[f'selected_filter_{col_name}']
-            if selected_vals:
-                filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+        # Apply additional filters only when the apply button is clicked
+        if 'apply_filters_submitted' in locals() and apply_filters_submitted:
+            for col_name in st.session_state['additional_filters_selected']:
+                selected_vals = st.session_state['filter_values'].get(col_name, [])
+                if selected_vals:
+                    filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+            st.success("Filters applied successfully!")
+            # Store both the filtered data and the filter state
+            st.session_state['filtered_df'] = filtered_df.copy()
+            st.session_state['filter_state'] = {
+                'applied': True,
+                'filters': st.session_state['filter_values'].copy()
+            }
+            # Clear any existing clustering results since they're no longer valid
+            if 'clustered_data' in st.session_state:
+                del st.session_state['clustered_data']
+            if 'topic_model' in st.session_state:
+                del st.session_state['topic_model']
+            if 'current_clustering_data' in st.session_state:
+                del st.session_state['current_clustering_data']
+            if 'current_clustering_option' in st.session_state:
+                del st.session_state['current_clustering_option']
+            if 'hierarchy' in st.session_state:
+                del st.session_state['hierarchy']
 
-        st.session_state['filtered_df'] = filtered_df
+        elif 'filter_state' in st.session_state and st.session_state['filter_state']['applied']:
+            # Reapply existing filters
+            for col_name, selected_vals in st.session_state['filter_state']['filters'].items():
+                if selected_vals:
+                    filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+            st.session_state['filtered_df'] = filtered_df.copy()
 
-        st.write("Filtered Data Preview:")
-        st.write(filtered_df.head())
+        # Only show preview if we have data
+        if 'filtered_df' in st.session_state:
+            st.write("Filtered Data Preview:")
+            st.write(st.session_state['filtered_df'].head())
+            st.write(f"Total number of results: {len(st.session_state['filtered_df'])}")
 
-        # Add total count of results
-        st.write(f"Total number of results: {len(filtered_df)}")
+            # Provide download button for filtered data
+            output = io.BytesIO()
+            writer = pd.ExcelWriter(output, engine='openpyxl')
+            st.session_state['filtered_df'].to_excel(writer, index=False)
+            writer.close()
+            processed_data = output.getvalue()
 
-        # Provide download button for filtered data
-        output = io.BytesIO()
-        writer = pd.ExcelWriter(output, engine='openpyxl')
-        filtered_df.to_excel(writer, index=False)
-        writer.close()
-        processed_data = output.getvalue()
-
-        st.download_button(
-            label="Download Filtered Data",
-            data=processed_data,
-            file_name='filtered_data.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
+            st.download_button(
+                label="Download Filtered Data",
+                data=processed_data,
+                file_name='filtered_data.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
     else:
         st.warning("Please ensure the default dataset exists in the 'input' directory.")
 else:
@@ -356,7 +273,7 @@ else:
             df_cols = df.columns.tolist()
 
             # Additional filters logic for uploaded dataset
-            st.write("**Select Text Columns for Embedding**")
+            st.subheader("**Select Text Columns for Embedding**")
             text_columns_selected = st.multiselect("Text Columns:", df_cols, default=df_cols[:1] if df_cols else [])
             st.session_state['text_columns'] = text_columns_selected
 
@@ -767,7 +684,10 @@ with tab2:
             col1, col2 = st.columns(2)
             with col1:
                 with st.form("clustering_parameters"):
-                    clustering_option = st.radio("Select data for clustering:", ('Full Dataset', 'Semantic Search Results'))
+                    clustering_option = st.radio(
+                        "Select data for clustering:",
+                        ('Full Dataset', 'Filtered Dataset', 'Semantic Search Results')
+                    )
                     if 'min_cluster_size' not in st.session_state:
                         st.session_state.min_cluster_size = 5
                     min_cluster_size_val = st.slider(
@@ -782,14 +702,26 @@ with tab2:
 
             if clustering_option == 'Semantic Search Results':
                 if st.session_state.get('search_results') is not None and not st.session_state['search_results'].empty:
-                    df_to_cluster = st.session_state['search_results']
+                    df_to_cluster = st.session_state['search_results'].copy()
                 else:
                     st.warning("No search results found. Please perform a semantic search first.")
                     df_to_cluster = None
-            else:
-                df_to_cluster = st.session_state['filtered_df']
+            elif clustering_option == 'Filtered Dataset':
+                if ('filtered_df' in st.session_state and 
+                    not st.session_state['filtered_df'].empty and 
+                    'filter_state' in st.session_state and 
+                    st.session_state['filter_state']['applied']):
+                    df_to_cluster = st.session_state['filtered_df'].copy()
+                else:
+                    st.warning("No filtered dataset available. Please apply filters first.")
+                    df_to_cluster = None
+            else:  # Full Dataset
+                df_to_cluster = st.session_state['df'].copy()
 
             if df_to_cluster is not None and not df_to_cluster.empty:
+                # Store the current dataset choice in session state
+                st.session_state['current_clustering_option'] = clustering_option
+                st.session_state['current_clustering_data'] = df_to_cluster.copy()
                 text_columns = st.session_state.get('text_columns', [])
                 if not text_columns:
                     st.warning("No text columns selected. Please select text columns to embed before clustering.")
@@ -817,6 +749,7 @@ with tab2:
                                 filtered_text = ' '.join([word for word in word_tokens if word.lower() not in stop_words])
                                 texts_cleaned.append(filtered_text)
 
+                            # Important: Use the indices from our filtered/selected dataset
                             selected_indices = dfc.index
                             embeddings_clustering = embeddings[selected_indices]
 
@@ -834,58 +767,40 @@ with tab2:
                                     topic_model = BERTopic(embedding_model=sentence_model, 
                                                          hdbscan_model=hdbscan_model)
                                     try:
-                                        # Ensure embeddings are on CPU for clustering
+                                        # Ensure we're using the correct texts for clustering
                                         topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
                                         dfc['Topic'] = topics
                                         st.session_state['topic_model'] = topic_model
                                         # Store the clustered data in session state
                                         st.session_state['clustered_data'] = dfc.copy()
-                                        # Also update the filtered_df with topics
-                                        if clustering_option == 'Full Dataset':
+                                        
+                                        # Only update the filtered_df with topics if we're working with it
+                                        if clustering_option == 'Filtered Dataset':
                                             st.session_state['filtered_df'].loc[dfc.index, 'Topic'] = dfc['Topic']
 
                                         # Add topic overview table first
                                         st.subheader("Topic Overview")
                                         
-                                        # Get unique topics and their counts
-                                        topic_counts = dfc['Topic'].value_counts().sort_index()
-                                        
-                                        # Create overview data
-                                        overview_data = []
-                                        for topic_id in topic_counts.index:
-                                            # Get top words for the topic
-                                            top_words = topic_model.get_topic(topic_id)
-                                            # Format keywords and their weights
+                                        # Get cluster info: count, top keywords
+                                        cluster_info = []
+                                        for t in topics:
+                                            # Use dfc which has the Topic column we just created
+                                            cluster_docs = dfc[dfc['Topic'] == t]
+                                            count = len(cluster_docs)
+                                            top_words = topic_model.get_topic(t)
                                             if top_words:
-                                                keywords = ", ".join([f"{word} ({weight:.3f})" for word, weight in top_words[:5]])
+                                                top_keywords = ", ".join([w[0] for w in top_words[:5]])
                                             else:
-                                                keywords = "N/A"
-                                            
-                                            # Add to overview data
-                                            overview_data.append({
-                                                "Topic": int(topic_id),
-                                                "Size": topic_counts[topic_id],
-                                                "% of Total": f"{(topic_counts[topic_id] / len(dfc) * 100):.1f}%",
-                                                "Top Keywords (with weights)": keywords
-                                            })
-                                        
-                                        # Create and display overview DataFrame
-                                        overview_df = pd.DataFrame(overview_data)
-                                        st.dataframe(
-                                            overview_df,
-                                            column_config={
-                                                "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
-                                                "Size": st.column_config.NumberColumn("Size", help="Number of documents in this topic"),
-                                                "% of Total": st.column_config.TextColumn("% of Total", help="Percentage of total documents"),
-                                                "Top Keywords (with weights)": st.column_config.TextColumn(
-                                                    "Top Keywords (with weights)",
-                                                    help="Top 5 keywords and their importance weights for this topic"
-                                                )
-                                            }
-                                        )
+                                                top_keywords = "N/A"
+                                            cluster_info.append((t, count, top_keywords))
+                                        cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+
+                                        st.write("Available Clusters for Summarization:")
+                                        st.dataframe(cluster_df)
 
                                         # Then show full clustering results
                                         st.subheader("Clustering Results")
+                                        # Only show the relevant columns from our working dataset
                                         columns_to_display = [col for col in dfc.columns if col not in ['text']]
                                         st.write(dfc[columns_to_display])
 
@@ -1018,7 +933,8 @@ with tab3:
                         # Get cluster info: count, top keywords
                         cluster_info = []
                         for t in topics:
-                            cluster_docs = df_summ[df_summ['Topic'] == t]
+                            # Use dfc which has the Topic column we just created
+                            cluster_docs = dfc[dfc['Topic'] == t]
                             count = len(cluster_docs)
                             top_words = topic_model.get_topic(t)
                             if top_words:
@@ -1055,82 +971,6 @@ with tab3:
 
                                 temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
                                 max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
-                                
-                                # Add options for enhanced summaries with references
-                                st.write("### Enhanced Summary Options")
-                                
-                                # Initialize enable_references in session state if not present
-                                if 'enable_references' not in st.session_state:
-                                    st.session_state.enable_references = False
-                                    st.session_state.reference_id_column = None
-                                    st.session_state.has_url_column = False
-                                    st.session_state.url_column = None
-                                
-                                # Get all available columns for reference selection
-                                available_columns = df_summ.columns.tolist()
-                                # Filter out some columns that wouldn't make sense as references
-                                filtered_columns = [col for col in available_columns if col not in ['text', 'Topic', 'similarity_score']]
-                                
-                                # Option to enable references
-                                st.session_state.enable_references = st.checkbox(
-                                    "Enable references in summaries", 
-                                    value=st.session_state.enable_references,
-                                    help="Add references to the source documents in the summaries"
-                                )
-                                
-                                # Always show reference options, but disable them if references are not enabled
-                                reference_id_column = st.selectbox(
-                                    "Select column to use as reference ID:", 
-                                    filtered_columns,
-                                    index=filtered_columns.index(st.session_state.reference_id_column) if st.session_state.reference_id_column in filtered_columns else 0,
-                                    help="This column will be used to identify the source of each part of the summary",
-                                    disabled=not st.session_state.enable_references
-                                )
-                                
-                                # Store the selected column in session state
-                                if st.session_state.enable_references:
-                                    st.session_state.reference_id_column = reference_id_column
-                                
-                                # Option to select a URL column for hyperlinking
-                                url_columns = [col for col in filtered_columns if 'url' in col.lower() or 'link' in col.lower()]
-                                if url_columns:
-                                    default_url_column = url_columns[0]
-                                else:
-                                    default_url_column = None
-                                
-                                has_url_column = st.checkbox(
-                                    "Add hyperlinks to references", 
-                                    value=st.session_state.has_url_column if st.session_state.enable_references else bool(default_url_column),
-                                    disabled=not st.session_state.enable_references
-                                )
-                                
-                                # Store the checkbox state in session state
-                                if st.session_state.enable_references:
-                                    st.session_state.has_url_column = has_url_column
-                                
-                                # URL column selection
-                                if has_url_column:
-                                    url_column_index = 0
-                                    if st.session_state.url_column in filtered_columns:
-                                        url_column_index = filtered_columns.index(st.session_state.url_column)
-                                    elif default_url_column in filtered_columns:
-                                        url_column_index = filtered_columns.index(default_url_column)
-                                    
-                                    url_column = st.selectbox(
-                                        "Select column containing URLs:", 
-                                        filtered_columns,
-                                        index=url_column_index,
-                                        help="URLs from this column will be used to create hyperlinks in the references",
-                                        disabled=not st.session_state.enable_references
-                                    )
-                                    
-                                    # Store the selected URL column in session state
-                                    if st.session_state.enable_references:
-                                        st.session_state.url_column = url_column
-                                else:
-                                    url_column = None
-                                    st.session_state.url_column = None
-                                
                                 submitted = st.form_submit_button("Generate Summaries")
 
                         if submitted:
@@ -1167,31 +1007,12 @@ with tab3:
                                         chain = LLMChain(llm=llm, prompt=chat_prompt)
                                         response = chain.run(user_prompt=user_prompt)
                                     high_level_summary = response.strip()
-                                    
-                                    # Process the high-level summary with references if enabled
-                                    if st.session_state.enable_references:
-                                        with st.spinner("Adding references to high-level summary..."):
-                                            enhanced_summary = add_references_to_summary(
-                                                high_level_summary, 
-                                                df_to_summarize, 
-                                                st.session_state.reference_id_column,
-                                                st.session_state.url_column if st.session_state.has_url_column else None,
-                                                llm
-                                            )
-                                            st.write("### High-Level Summary (with references):")
-                                            st.markdown(enhanced_summary, unsafe_allow_html=True)
-                                            
-                                            # Also show the original summary
-                                            with st.expander("View original summary (without references)"):
-                                                st.write(high_level_summary)
-                                    else:
-                                        st.write("### High-Level Summary:")
-                                        st.write(high_level_summary)
+                                    st.write("### High-Level Summary:")
+                                    st.write(high_level_summary)
 
                                     # Summaries per cluster
                                     if selected_topics:
                                         summaries = []
-                                        enhanced_summaries = []
                                         grouped_list = list(df_to_summarize.groupby('Topic'))
                                         grouped_list = [g for g in grouped_list if g[0] in selected_topics]
 
@@ -1211,21 +1032,7 @@ with tab3:
                                                 chain = LLMChain(llm=llm, prompt=chat_prompt)
                                                 response = chain.run(user_prompt=user_prompt)
                                                 summary = response.strip()
-                                                
-                                                result = {'Topic': topic, 'Summary': summary}
-                                                
-                                                # Add enhanced summary with references if enabled
-                                                if st.session_state.enable_references:
-                                                    enhanced_summary = add_references_to_summary(
-                                                        summary, 
-                                                        group, 
-                                                        st.session_state.reference_id_column,
-                                                        st.session_state.url_column if st.session_state.has_url_column else None,
-                                                        llm
-                                                    )
-                                                    result['Enhanced_Summary'] = enhanced_summary
-                                                
-                                                return result
+                                                return {'Topic': topic, 'Summary': summary}
 
                                             with st.spinner("Summarizing each selected cluster..."):
                                                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -1238,27 +1045,9 @@ with tab3:
 
                                             if summaries:
                                                 summary_df = pd.DataFrame(summaries)
-                                                
-                                                if st.session_state.enable_references and 'Enhanced_Summary' in summary_df.columns:
-                                                    st.write("### Summaries per Cluster (with references):")
-                                                    # Display enhanced summaries with HTML rendering
-                                                    for _, row in summary_df.iterrows():
-                                                        st.write(f"**Topic {int(row['Topic'])}**")
-                                                        st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
-                                                        st.write("---")
-                                                    
-                                                    # Also provide the original summaries in the dataframe
-                                                    with st.expander("View all summaries in table format"):
-                                                        # Remove the HTML-formatted enhanced summaries from the display dataframe
-                                                        display_df = summary_df[['Topic', 'Summary']]
-                                                        st.write(display_df)
-                                                else:
-                                                    st.write("### Summaries per Cluster:")
-                                                    st.write(summary_df)
-                                                
-                                                # Prepare CSV for download (without HTML formatting)
-                                                download_df = summary_df[['Topic', 'Summary']]
-                                                csv = download_df.to_csv(index=False)
+                                                st.write("### Summaries per Cluster:")
+                                                st.write(summary_df)
+                                                csv = summary_df.to_csv(index=False)
                                                 b64 = base64.b64encode(csv.encode()).decode()
                                                 href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
                                                 st.markdown(href, unsafe_allow_html=True)
