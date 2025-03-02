@@ -36,6 +36,80 @@ from langchain.chains import LLMChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
+# Initialize session state for active tab
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "Semantic Search"
+
+# Initialize session state variables for summarization
+if 'enable_references' not in st.session_state:
+    st.session_state.enable_references = True
+if 'reference_id_column' not in st.session_state:
+    st.session_state.reference_id_column = None
+if 'has_url_column' not in st.session_state:
+    st.session_state.has_url_column = True
+if 'url_column' not in st.session_state:
+    st.session_state.url_column = None
+if 'summary_scope' not in st.session_state:
+    st.session_state.summary_scope = "All clusters"
+
+# Function to ensure all session state variables are initialized
+def initialize_session_state():
+    """Initialize all session state variables to prevent errors."""
+    # Tab state
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = "Semantic Search"
+    
+    # Data state
+    if 'df' not in st.session_state:
+        st.session_state.df = pd.DataFrame()
+    if 'filtered_df' not in st.session_state:
+        st.session_state.filtered_df = pd.DataFrame()
+    if 'using_default_dataset' not in st.session_state:
+        st.session_state.using_default_dataset = False
+    if 'text_columns' not in st.session_state:
+        st.session_state.text_columns = []
+    
+    # Filter state
+    if 'filter_state' not in st.session_state:
+        st.session_state.filter_state = {'applied': False, 'filters': {}}
+    if 'filter_values' not in st.session_state:
+        st.session_state.filter_values = {}
+    if 'additional_filters_selected' not in st.session_state:
+        st.session_state.additional_filters_selected = []
+    
+    # Search state
+    if 'search_results' not in st.session_state:
+        st.session_state.search_results = pd.DataFrame()
+    
+    # Clustering state
+    if 'min_cluster_size' not in st.session_state:
+        st.session_state.min_cluster_size = 5
+    if 'clustered_data' not in st.session_state:
+        st.session_state.clustered_data = pd.DataFrame()
+    if 'clustering_params' not in st.session_state:
+        st.session_state.clustering_params = {}
+    
+    # Summarization state
+    if 'enable_references' not in st.session_state:
+        st.session_state.enable_references = True
+    if 'reference_id_column' not in st.session_state:
+        st.session_state.reference_id_column = None
+    if 'has_url_column' not in st.session_state:
+        st.session_state.has_url_column = True
+    if 'url_column' not in st.session_state:
+        st.session_state.url_column = None
+    if 'summary_scope' not in st.session_state:
+        st.session_state.summary_scope = "All clusters"
+    if 'summary_results' not in st.session_state:
+        st.session_state.summary_results = []
+    if 'summary_params' not in st.session_state:
+        st.session_state.summary_params = {}
+    if 'high_level_summary' not in st.session_state:
+        st.session_state.high_level_summary = ""
+
+# Initialize all session state variables
+initialize_session_state()
+
 ################################################################################
 # NEW: Function to add references to summaries
 ################################################################################
@@ -60,109 +134,124 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     if llm is None:
         return summary
     
-    # Split the summary into sentences for processing
-    sentences = re.split(r'(?<=[.!?])\s+', summary)
-    
-    # Prepare source texts with their reference IDs
-    source_texts = []
-    reference_ids = []
-    urls = []
-    
-    for _, row in source_df.iterrows():
-        if 'text' in row and pd.notna(row['text']) and reference_column in row and pd.notna(row[reference_column]):
-            source_texts.append(str(row['text']))
-            reference_ids.append(str(row[reference_column]))
-            if url_column and url_column in row and pd.notna(row[url_column]):
-                urls.append(str(row[url_column]))
-            else:
-                urls.append(None)
-    
-    # If we have no valid sources, return the original summary
-    if not source_texts:
-        return summary
-    
-    # Create a mapping between URLs and reference IDs if needed
-    url_map = {}
-    if url_column:
-        for ref_id, url in zip(reference_ids, urls):
-            if url:
-                url_map[ref_id] = url
-    
-    # Define the system prompt for source attribution
-    system_prompt = """
-    You are an expert at identifying the source of information. You will be given:
-    1. A sentence from a summary
-    2. A list of source texts with their IDs
-    
-    Your task is to identify which source text(s) the sentence most likely came from.
-    Return ONLY the IDs of the source texts that contributed to the sentence, separated by commas.
-    If you cannot confidently attribute the sentence to any source, return "unknown".
-    """
-    
-    enhanced_sentences = []
-    batch_size = 5
-    
-    # Process sentences in small batches to reduce API calls
-    for i in range(0, len(sentences), batch_size):
-        batch = sentences[i:i+batch_size]
-        batch_results = []
+    try:
+        # Split the summary into sentences for processing
+        sentences = re.split(r'(?<=[.!?])\s+', summary)
         
-        for sentence in batch:
-            if sentence.strip():
-                # Create the prompt for this sentence
-                user_prompt = f"""
-                Sentence: {sentence}
-                
-                Source texts:
-                {chr(10).join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
-                
-                Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
-                """
-                
-                # Create the messages for the chat
-                system_message = SystemMessagePromptTemplate.from_template(system_prompt)
-                human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
-                
-                try:
-                    chain = LLMChain(llm=llm, prompt=chat_prompt)
-                    response = chain.run(user_prompt=user_prompt)
-                    source_ids = response.strip()
+        # Prepare source texts with their reference IDs
+        source_texts = []
+        reference_ids = []
+        urls = []
+        
+        for _, row in source_df.iterrows():
+            if 'text' in row and pd.notna(row['text']) and reference_column in row and pd.notna(row[reference_column]):
+                source_texts.append(str(row['text']))
+                reference_ids.append(str(row[reference_column]))
+                if url_column and url_column in row and pd.notna(row[url_column]):
+                    urls.append(str(row[url_column]))
+                else:
+                    urls.append(None)
+        
+        # If we have no valid sources, return the original summary
+        if not source_texts:
+            return summary
+        
+        # Create a mapping between URLs and reference IDs if needed
+        url_map = {}
+        if url_column:
+            for ref_id, url in zip(reference_ids, urls):
+                if url:
+                    url_map[ref_id] = url
+        
+        # Define the system prompt for source attribution
+        system_prompt = """
+        You are an expert at identifying the source of information. You will be given:
+        1. A sentence from a summary
+        2. A list of source texts with their IDs
+        
+        Your task is to identify which source text(s) the sentence most likely came from.
+        Return ONLY the IDs of the source texts that contributed to the sentence, separated by commas.
+        If you cannot confidently attribute the sentence to any source, return "unknown".
+        """
+        
+        enhanced_sentences = []
+        # Increase batch size to reduce API calls
+        batch_size = 10
+        
+        # Limit source text length to avoid token limits
+        max_source_text_length = 300  # characters per source
+        
+        # Process sentences in batches to reduce API calls
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i+batch_size]
+            batch_results = []
+            
+            for sentence in batch:
+                if sentence.strip():
+                    # Create the prompt for this sentence with truncated source texts
+                    source_text_snippets = [f"ID: {ref_id}, Text: {text[:max_source_text_length]}..." 
+                                          for ref_id, text in zip(reference_ids, source_texts)]
                     
-                    if source_ids.lower() == "unknown":
-                        source_ids = ""
-                    else:
-                        # Extract just the IDs, removing extraneous chars
-                        source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
-                        source_ids = re.sub(r'\s+', '', source_ids)
+                    # Limit number of sources if there are too many
+                    if len(source_text_snippets) > 10:
+                        source_text_snippets = source_text_snippets[:10]
+                        
+                    user_prompt = f"""
+                    Sentence: {sentence}
                     
-                    batch_results.append((sentence, source_ids))
-                except Exception:
-                    # If there's an error, just use the sentence without attribution
+                    Source texts:
+                    {chr(10).join(source_text_snippets)}
+                    
+                    Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
+                    """
+                    
+                    # Create the messages for the chat
+                    system_message = SystemMessagePromptTemplate.from_template(system_prompt)
+                    human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                    chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
+                    
+                    try:
+                        chain = LLMChain(llm=llm, prompt=chat_prompt)
+                        response = chain.run(user_prompt=user_prompt)
+                        source_ids = response.strip()
+                        
+                        if source_ids.lower() == "unknown":
+                            source_ids = ""
+                        else:
+                            # Extract just the IDs, removing extraneous chars
+                            source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
+                            source_ids = re.sub(r'\s+', '', source_ids)
+                        
+                        batch_results.append((sentence, source_ids))
+                    except Exception as e:
+                        # If there's an error, just use the sentence without attribution
+                        batch_results.append((sentence, ""))
+                else:
                     batch_results.append((sentence, ""))
-            else:
-                batch_results.append((sentence, ""))
+            
+            # Turn each sentence into an enhanced sentence
+            for sentence, source_ids in batch_results:
+                if source_ids:
+                    ids = [id.strip() for id in source_ids.split(',') if id.strip()]
+                    ref_parts = []
+                    for id_ in ids:
+                        # If there's a URL for that reference ID, make it clickable
+                        if id_ in url_map and url_map[id_]:
+                            ref_parts.append(f'<a href="{url_map[id_]}" target="_blank">{id_}</a>')
+                        else:
+                            ref_parts.append(id_)
+                    
+                    ref_string = ", ".join(ref_parts)
+                    enhanced_sentence = f"{sentence} [{ref_string}]"
+                    enhanced_sentences.append(enhanced_sentence)
+                else:
+                    enhanced_sentences.append(sentence)
         
-        # Turn each sentence into an enhanced sentence
-        for sentence, source_ids in batch_results:
-            if source_ids:
-                ids = [id.strip() for id in source_ids.split(',') if id.strip()]
-                ref_parts = []
-                for id_ in ids:
-                    # If there's a URL for that reference ID, make it clickable
-                    if id_ in url_map and url_map[id_]:
-                        ref_parts.append(f'<a href="{url_map[id_]}" target="_blank">{id_}</a>')
-                    else:
-                        ref_parts.append(id_)
-                
-                ref_string = ", ".join(ref_parts)
-                enhanced_sentence = f"{sentence} [{ref_string}]"
-                enhanced_sentences.append(enhanced_sentence)
-            else:
-                enhanced_sentences.append(sentence)
-    
-    enhanced_summary = " ".join(enhanced_sentences)
-    return enhanced_summary
+        enhanced_summary = " ".join(enhanced_sentences)
+        return enhanced_summary
+    except Exception as e:
+        # If anything goes wrong, return the original summary
+        return f"{summary} [Error adding references: {str(e)}]"
 
 ################################################################################
 # End of new function
@@ -212,7 +301,29 @@ def load_uploaded_dataset(uploaded_file):
 
 def generate_embeddings(texts, model):
     with st.spinner('Calculating embeddings...'):
-        embeddings = model.encode(texts, show_progress_bar=True, device=device)
+        # Add a progress bar
+        progress_bar = st.progress(0)
+        total_texts = len(texts)
+        
+        # Process in batches to show progress
+        batch_size = 100
+        all_embeddings = []
+        
+        for i in range(0, total_texts, batch_size):
+            batch = texts[i:min(i+batch_size, total_texts)]
+            batch_embeddings = model.encode(batch, show_progress_bar=False, device=device)
+            all_embeddings.append(batch_embeddings)
+            progress_bar.progress(min((i + batch_size) / total_texts, 1.0))
+        
+        # Combine all batches
+        if len(all_embeddings) == 1:
+            embeddings = all_embeddings[0]
+        else:
+            embeddings = np.vstack(all_embeddings)
+        
+        # Clear the progress bar
+        progress_bar.empty()
+        
     return embeddings
 
 @st.cache_resource
@@ -238,33 +349,41 @@ def load_or_compute_embeddings(df, using_default_dataset, uploaded_file_name=Non
     texts = df_fill[text_columns].astype(str).agg(' '.join, axis=1).tolist()
 
     # Check session_state cache first
-    if 'embeddings' in st.session_state and 'embeddings_file' in st.session_state and 'last_text_columns' in st.session_state:
-        # If columns are the same and length matches, reuse
-        if (st.session_state['last_text_columns'] == text_columns) and (len(st.session_state['embeddings']) == len(texts)):
-            return st.session_state['embeddings'], st.session_state['embeddings_file']
+    if ('embeddings' in st.session_state and 
+        'last_text_columns' in st.session_state and 
+        st.session_state['last_text_columns'] == text_columns and 
+        len(st.session_state['embeddings']) == len(texts)):
+        return st.session_state['embeddings'], st.session_state.get('embeddings_file', embeddings_file)
 
     # If embeddings file exists on disk, try to load and match size
     if os.path.exists(embeddings_file):
-        with open(embeddings_file, 'rb') as f:
-            embeddings = pickle.load(f)
-        if len(embeddings) == len(texts):
-            st.write("Loading pre-calculated embeddings...")
-            st.session_state['embeddings'] = embeddings
-            st.session_state['embeddings_file'] = embeddings_file
-            st.session_state['last_text_columns'] = text_columns
-            return embeddings, embeddings_file
-        else:
-            st.write("Pre-calculated embeddings do not match current data. Regenerating...")
+        try:
+            with open(embeddings_file, 'rb') as f:
+                embeddings = pickle.load(f)
+            if len(embeddings) == len(texts):
+                st.session_state['embeddings'] = embeddings
+                st.session_state['embeddings_file'] = embeddings_file
+                st.session_state['last_text_columns'] = text_columns
+                return embeddings, embeddings_file
+        except Exception as e:
+            st.warning(f"Error loading embeddings: {str(e)}. Computing new embeddings.")
 
-    # Otherwise, compute embeddings
-    st.write("Generating embeddings...")
+    # If we get here, we need to compute embeddings
     model = get_embedding_model()
     embeddings = generate_embeddings(texts, model)
-    with open(embeddings_file, 'wb') as f:
-        pickle.dump(embeddings, f)
+    
+    # Save embeddings to disk
+    try:
+        with open(embeddings_file, 'wb') as f:
+            pickle.dump(embeddings, f)
+    except Exception as e:
+        st.warning(f"Error saving embeddings: {str(e)}")
+    
+    # Update session state
     st.session_state['embeddings'] = embeddings
     st.session_state['embeddings_file'] = embeddings_file
     st.session_state['last_text_columns'] = text_columns
+    
     return embeddings, embeddings_file
 
 def reset_filters():
@@ -442,11 +561,24 @@ else:
     if 'filtered_df' in st.session_state:
         st.write(f"Total number of results: {len(st.session_state['filtered_df'])}")
 
-# Create tabs (including the new "Internal Validation" tab)
-tab1, tab2, tab3, tab_help, tab_internal = st.tabs(["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"])
+# Create tabs with callbacks
+tab_names = ["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"]
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = tab_names[0]
+
+# Function to set the active tab
+def set_active_tab(tab_name):
+    if tab_name in tab_names:
+        st.session_state.active_tab = tab_name
+
+# Create the tabs
+tabs = st.tabs(tab_names)
+
+# Map tabs to their indices
+tab_indices = {name: i for i, name in enumerate(tab_names)}
 
 # Help Tab
-with tab_help:
+with tabs[3]:
     st.header("Help")
     st.markdown("""
     ### About SNAP
@@ -500,7 +632,7 @@ with tab_help:
     """)
 
 # Semantic Search Tab
-with tab1:
+with tabs[0]:
     st.header("Semantic Search")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
         if not st.session_state['filtered_df'].empty:
@@ -510,7 +642,7 @@ with tab1:
 
                 Unlike traditional keyword search that looks for exact matches, semantic search understands the meaning and context of your query:
                 - **Query Processing**: We embed your query into a high-dimensional vector capturing its meaning.
-                - **Similarity Matching**: We compare your query vector to each document’s vector (computed from the selected text columns). Documents with higher similarity are more relevant.
+                - **Similarity Matching**: We compare your query vector to each document's vector (computed from the selected text columns). Documents with higher similarity are more relevant.
                 - **Threshold**: Adjusting the threshold changes how strict the match must be.
                 - **Include / Exclude Keywords**: You can enforce must-have or exclude terms after the semantic similarity step.
                 """)
@@ -650,7 +782,7 @@ with tab1:
         st.warning("Please select a dataset to proceed and select text columns.")
 
 # Clustering Tab
-with tab2:
+with tabs[1]:
     st.header("Clustering")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
         if not st.session_state['filtered_df'].empty:
@@ -738,116 +870,145 @@ with tab2:
                             embeddings_clustering = embeddings[selected_indices]
 
                             if submitted:
-                                with st.spinner("Performing clustering..."):
-                                    sentence_model = get_embedding_model()
-                                    # HDBSCAN runs on CPU
-                                    embeddings_for_clustering = (
-                                        embeddings_clustering.cpu().numpy()
-                                        if torch.is_tensor(embeddings_clustering)
-                                        else embeddings_clustering
-                                    )
-                                    hdbscan_model = HDBSCAN(
-                                        min_cluster_size=min_cluster_size_val, 
-                                        metric='euclidean', 
-                                        cluster_selection_method='eom'
-                                    )
-                                    topic_model = BERTopic(
-                                        embedding_model=sentence_model,
-                                        hdbscan_model=hdbscan_model
-                                    )
-                                    try:
-                                        topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
-                                        dfc['Topic'] = topics
-                                        st.session_state['topic_model'] = topic_model
-                                        st.session_state['clustered_data'] = dfc.copy()
+                                if df_to_cluster is not None and not df_to_cluster.empty:
+                                    # Ensure all session state variables are initialized
+                                    initialize_session_state()
+                                    
+                                    # Check if we already have clustering results with the same parameters
+                                    reuse_existing = False
+                                    if ('clustered_data' in st.session_state and 
+                                        'clustering_params' in st.session_state and
+                                        st.session_state['clustering_params'].get('min_cluster_size') == min_cluster_size_val and
+                                        st.session_state['clustering_params'].get('data_hash') == hash(str(df_to_cluster.shape))):
+                                        
+                                        # We can reuse existing results
+                                        reuse_existing = True
+                                        clustered_df = st.session_state['clustered_data']
+                                        st.success("Using cached clustering results.")
+                                    
+                                    if not reuse_existing:
+                                        with st.spinner("Clustering documents..."):
+                                            sentence_model = get_embedding_model()
+                                            # HDBSCAN runs on CPU
+                                            embeddings_for_clustering = (
+                                                embeddings_clustering.cpu().numpy()
+                                                if torch.is_tensor(embeddings_clustering)
+                                                else embeddings_clustering
+                                            )
+                                            hdbscan_model = HDBSCAN(
+                                                min_cluster_size=min_cluster_size_val, 
+                                                metric='euclidean', 
+                                                cluster_selection_method='eom',
+                                                prediction_data=True
+                                            )
+                                            topic_model = BERTopic(
+                                                embedding_model=sentence_model,
+                                                hdbscan_model=hdbscan_model,
+                                                calculate_probabilities=True,
+                                                verbose=True
+                                            )
+                                            try:
+                                                topics, probs = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
+                                                dfc['Topic'] = topics
+                                                st.session_state['topic_model'] = topic_model
+                                                st.session_state['clustered_data'] = dfc.copy()
+                                                
+                                                # Store clustering parameters for caching
+                                                st.session_state['clustering_params'] = {
+                                                    'min_cluster_size': min_cluster_size_val,
+                                                    'data_hash': hash(str(df_to_cluster.shape))
+                                                }
+                                                st.session_state['min_cluster_size_val'] = min_cluster_size_val
+                                                
+                                                # Set the active tab to stay on Clustering
+                                                set_active_tab("Clustering")
+                                                
+                                                # Display clustering results
+                                                clustered_df = dfc
 
-                                        # If we used 'Filtered Dataset', we can store topics back to it
-                                        if clustering_option == 'Filtered Dataset':
-                                            st.session_state['filtered_df'].loc[dfc.index, 'Topic'] = dfc['Topic']
+                                                st.subheader("Topic Overview")
+                                                cluster_info = []
+                                                unique_topics = sorted(list(set(topics)))
+                                                for t in unique_topics:
+                                                    cluster_docs = dfc[dfc['Topic'] == t]
+                                                    count = len(cluster_docs)
+                                                    top_words = topic_model.get_topic(t)
+                                                    if top_words:
+                                                        top_keywords = ", ".join([w[0] for w in top_words[:5]])
+                                                    else:
+                                                        top_keywords = "N/A"
+                                                    cluster_info.append((t, count, top_keywords))
+                                                cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+                                                st.dataframe(cluster_df)
 
-                                        st.subheader("Topic Overview")
-                                        cluster_info = []
-                                        unique_topics = sorted(list(set(topics)))
-                                        for t in unique_topics:
-                                            cluster_docs = dfc[dfc['Topic'] == t]
-                                            count = len(cluster_docs)
-                                            top_words = topic_model.get_topic(t)
-                                            if top_words:
-                                                top_keywords = ", ".join([w[0] for w in top_words[:5]])
-                                            else:
-                                                top_keywords = "N/A"
-                                            cluster_info.append((t, count, top_keywords))
-                                        cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
-                                        st.dataframe(cluster_df)
+                                                st.subheader("Clustering Results")
+                                                columns_to_display = [col for col in dfc.columns if col != 'text']
+                                                st.write(dfc[columns_to_display])
 
-                                        st.subheader("Clustering Results")
-                                        columns_to_display = [col for col in dfc.columns if col != 'text']
-                                        st.write(dfc[columns_to_display])
+                                                st.write("Visualizing Topics...")
+                                                st.subheader("Intertopic Distance Map")
+                                                fig1 = topic_model.visualize_topics()
+                                                fig1.update_traces(
+                                                    hoverlabel=dict(bgcolor='black', font_size=14, font_color='white')
+                                                )
+                                                st.plotly_chart(fig1)
 
-                                        st.write("Visualizing Topics...")
-                                        st.subheader("Intertopic Distance Map")
-                                        fig1 = topic_model.visualize_topics()
-                                        fig1.update_traces(
-                                            hoverlabel=dict(bgcolor='black', font_size=14, font_color='white')
-                                        )
-                                        st.plotly_chart(fig1)
+                                                st.subheader("Topic Document Visualization")
+                                                fig2 = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_clustering)
+                                                st.plotly_chart(fig2)
 
-                                        st.subheader("Topic Document Visualization")
-                                        fig2 = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_clustering)
-                                        st.plotly_chart(fig2)
+                                                st.subheader("Topic Hierarchy Visualization")
+                                                fig3 = topic_model.visualize_hierarchy()
+                                                st.plotly_chart(fig3)
 
-                                        st.subheader("Topic Hierarchy Visualization")
-                                        fig3 = topic_model.visualize_hierarchy()
-                                        st.plotly_chart(fig3)
+                                                st.write("Computing Hierarchical Topics...")
+                                                hierarchy = topic_model.hierarchical_topics(texts_cleaned)
+                                                st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
 
-                                        st.write("Computing Hierarchical Topics...")
-                                        hierarchy = topic_model.hierarchical_topics(texts_cleaned)
-                                        st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
+                                                st.subheader("Hierarchical Topic Treemap")
+                                                hierarchy = st.session_state['hierarchy']
+                                                if hierarchy is not None and not hierarchy.empty:
+                                                    parent_dict = {row.Parent_Name: row for _, row in hierarchy.iterrows()}
+                                                    root_row = hierarchy.iloc[hierarchy['Parent_ID'].argmax()]
+                                                    root_name = root_row.Parent_Name
+                                                    all_topics = root_row['Topics']
+                                                    root_size = len(all_topics)
 
-                                        st.subheader("Hierarchical Topic Treemap")
-                                        hierarchy = st.session_state['hierarchy']
-                                        if hierarchy is not None and not hierarchy.empty:
-                                            parent_dict = {row.Parent_Name: row for _, row in hierarchy.iterrows()}
-                                            root_row = hierarchy.iloc[hierarchy['Parent_ID'].argmax()]
-                                            root_name = root_row.Parent_Name
-                                            all_topics = root_row['Topics']
-                                            root_size = len(all_topics)
+                                                    treemap_nodes = [{"names": "All Topics", "parents": "", "values": root_size}]
 
-                                            treemap_nodes = [{"names": "All Topics", "parents": "", "values": root_size}]
+                                                    def build_nodes(name, parent_name):
+                                                        if name in parent_dict:
+                                                            row = parent_dict[name]
+                                                            node_topics = row['Topics']
+                                                            node_size = len(node_topics)
+                                                            treemap_nodes.append({
+                                                                "names": name,
+                                                                "parents": parent_name,
+                                                                "values": node_size
+                                                            })
+                                                            left_child = row['Child_Left_Name']
+                                                            right_child = row['Child_Right_Name']
+                                                            build_nodes(left_child, name)
+                                                            build_nodes(right_child, name)
+                                                        else:
+                                                            treemap_nodes.append({
+                                                                "names": name,
+                                                                "parents": parent_name,
+                                                                "values": 1
+                                                            })
 
-                                            def build_nodes(name, parent_name):
-                                                if name in parent_dict:
-                                                    row = parent_dict[name]
-                                                    node_topics = row['Topics']
-                                                    node_size = len(node_topics)
-                                                    treemap_nodes.append({
-                                                        "names": name,
-                                                        "parents": parent_name,
-                                                        "values": node_size
-                                                    })
-                                                    left_child = row['Child_Left_Name']
-                                                    right_child = row['Child_Right_Name']
-                                                    build_nodes(left_child, name)
-                                                    build_nodes(right_child, name)
+                                                    build_nodes(root_name, "All Topics")
+                                                    treemap_df = pd.DataFrame(treemap_nodes)
+                                                    fig_treemap = px.treemap(treemap_df, names='names', parents='parents', values='values')
+                                                    fig_treemap.update_traces(root_color="lightgrey")
+                                                    fig_treemap.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+                                                    st.plotly_chart(fig_treemap)
                                                 else:
-                                                    treemap_nodes.append({
-                                                        "names": name,
-                                                        "parents": parent_name,
-                                                        "values": 1
-                                                    })
+                                                    st.warning("No hierarchical topic information available for Treemap.")
 
-                                            build_nodes(root_name, "All Topics")
-                                            treemap_df = pd.DataFrame(treemap_nodes)
-                                            fig_treemap = px.treemap(treemap_df, names='names', parents='parents', values='values')
-                                            fig_treemap.update_traces(root_color="lightgrey")
-                                            fig_treemap.update_layout(margin=dict(t=50, l=25, r=25, b=25))
-                                            st.plotly_chart(fig_treemap)
-                                        else:
-                                            st.warning("No hierarchical topic information available for Treemap.")
-
-                                    except Exception as e:
-                                        st.error(f"An error occurred during clustering: {e}")
-                                        st.session_state['clustering_error'] = str(e)
+                                            except Exception as e:
+                                                st.error(f"An error occurred during clustering: {e}")
+                                                st.session_state['clustering_error'] = str(e)
                     else:
                         st.warning("No embeddings available. Please select text columns and ensure embeddings are computed.")
         else:
@@ -856,7 +1017,7 @@ with tab2:
         st.warning("Please select a dataset to proceed and select text columns.")
 
 # Summarization Tab
-with tab3:
+with tabs[2]:
     st.header("Summarization")
     if 'filtered_df' in st.session_state and st.session_state['filtered_df'] is not None:
         if not st.session_state['filtered_df'].empty:
@@ -904,6 +1065,73 @@ with tab3:
                                 "Generate summaries for:",
                                 ["All clusters", "Specific clusters"]
                             )
+                            
+                            ############################################################################
+                            # Enhanced Summary Options (references) - MOVED OUTSIDE THE FORM
+                            ############################################################################
+                            st.write("### Enhanced Summary Options")
+                            # All columns except text / Topic / similarity_score are potential references
+                            all_cols = df_summ.columns.tolist()
+                            ignore_cols = ['text', 'Topic', 'similarity_score']
+                            filtered_cols = [c for c in all_cols if c not in ignore_cols]
+
+                            # Checkbox to enable references - default to True
+                            st.session_state.enable_references = st.checkbox(
+                                "Enable references in summaries",
+                                value=True,
+                                help="Include source document references in the summary"
+                            )
+                            
+                            # Reference column selection
+                            if filtered_cols:
+                                ref_col_index = 0
+                                if st.session_state.reference_id_column in filtered_cols:
+                                    ref_col_index = filtered_cols.index(st.session_state.reference_id_column)
+                                else:
+                                    # Try to find a good default column (ID, Title, etc.)
+                                    for i, col in enumerate(filtered_cols):
+                                        if any(keyword in col.lower() for keyword in ['id', 'title', 'name']):
+                                            ref_col_index = i
+                                            break
+
+                                reference_id_column = st.selectbox(
+                                    "Select column to use for reference IDs:",
+                                    filtered_cols,
+                                    index=ref_col_index if ref_col_index < len(filtered_cols) else 0
+                                )
+
+                                st.session_state.reference_id_column = reference_id_column
+                            else:
+                                reference_id_column = None
+                                st.warning("No suitable columns available to serve as reference IDs.")
+                            
+                            # URL column logic
+                            has_url_column = st.checkbox(
+                                "Add hyperlinks to references",
+                                value=True
+                            )
+                            st.session_state.has_url_column = has_url_column
+
+                            if has_url_column and filtered_cols:
+                                # Filter likely URL columns
+                                possible_url_cols = [c for c in filtered_cols if 'url' in c.lower() or 'link' in c.lower()]
+                                if not possible_url_cols:
+                                    possible_url_cols = filtered_cols  # fallback if no "url/link" columns
+                                url_col_index = 0
+                                if st.session_state.url_column in possible_url_cols:
+                                    url_col_index = possible_url_cols.index(st.session_state.url_column)
+                                
+                                url_column = st.selectbox(
+                                    "Select column containing URLs:",
+                                    possible_url_cols,
+                                    index=url_col_index if url_col_index < len(possible_url_cols) else 0
+                                )
+                                
+                                st.session_state.url_column = url_column
+                            else:
+                                url_column = None
+                                st.session_state.url_column = None
+                            ############################################################################
 
                             with st.form("summarization_parameters"):
                                 topic_options = [int(t) for t in cluster_df["Topic"].tolist()]
@@ -916,81 +1144,31 @@ with tab3:
                                 temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
                                 max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
 
-                                ############################################################################
-                                # NEW: Enhanced Summary Options (references)
-                                ############################################################################
-                                if 'enable_references' not in st.session_state:
-                                    st.session_state.enable_references = False
-                                    st.session_state.reference_id_column = None
-                                    st.session_state.has_url_column = False
-                                    st.session_state.url_column = None
-
-                                st.write("### Enhanced Summary Options")
-                                # All columns except text / Topic / similarity_score are potential references
-                                all_cols = df_summ.columns.tolist()
-                                ignore_cols = ['text', 'Topic', 'similarity_score']
-                                filtered_cols = [c for c in all_cols if c not in ignore_cols]
-
-                                # Checkbox to enable references
-                                st.session_state.enable_references = st.checkbox(
-                                    "Enable references in summaries",
-                                    value=st.session_state.enable_references,
-                                    help="Include source document references in the summary"
-                                )
-                                # Reference column selection
-                                if filtered_cols:
-                                    ref_col_index = 0
-                                    if st.session_state.reference_id_column in filtered_cols:
-                                        ref_col_index = filtered_cols.index(st.session_state.reference_id_column)
-
-                                    reference_id_column = st.selectbox(
-                                        "Select column to use for reference IDs:",
-                                        filtered_cols,
-                                        index=ref_col_index if ref_col_index < len(filtered_cols) else 0,
-                                        disabled=not st.session_state.enable_references
-                                    )
-
-                                    if st.session_state.enable_references:
-                                        st.session_state.reference_id_column = reference_id_column
-                                else:
-                                    reference_id_column = None
-                                    st.warning("No suitable columns available to serve as reference IDs.")
-                                
-                                # URL column logic
-                                has_url_column = st.checkbox(
-                                    "Add hyperlinks to references",
-                                    value=st.session_state.has_url_column,
-                                    disabled=not st.session_state.enable_references
-                                )
-                                if st.session_state.enable_references:
-                                    st.session_state.has_url_column = has_url_column
-
-                                if has_url_column and filtered_cols:
-                                    # Filter likely URL columns
-                                    possible_url_cols = [c for c in filtered_cols if 'url' in c.lower() or 'link' in c.lower()]
-                                    if not possible_url_cols:
-                                        possible_url_cols = filtered_cols  # fallback if no "url/link" columns
-                                    url_col_index = 0
-                                    if st.session_state.url_column in possible_url_cols:
-                                        url_col_index = possible_url_cols.index(st.session_state.url_column)
-                                    
-                                    url_column = st.selectbox(
-                                        "Select column containing URLs:",
-                                        possible_url_cols,
-                                        index=url_col_index if url_col_index < len(possible_url_cols) else 0,
-                                        disabled=not (st.session_state.enable_references and has_url_column)
-                                    )
-                                    
-                                    if st.session_state.enable_references:
-                                        st.session_state.url_column = url_column
-                                else:
-                                    url_column = None
-                                    st.session_state.url_column = None
-                                ############################################################################
-
                                 submit_summary = st.form_submit_button("Generate Summaries")
 
                         if submit_summary:
+                            # Set the active tab to stay on Summarization
+                            set_active_tab("Summarization")
+                            
+                            # Ensure all session state variables are initialized
+                            initialize_session_state()
+                            
+                            # Ensure all required session state variables are available
+                            required_vars = ['enable_references', 'reference_id_column', 'has_url_column', 'url_column']
+                            missing_vars = [var for var in required_vars if var not in st.session_state]
+                            
+                            if missing_vars:
+                                for var in missing_vars:
+                                    if var == 'enable_references':
+                                        st.session_state.enable_references = True
+                                    elif var == 'reference_id_column':
+                                        st.session_state.reference_id_column = None
+                                    elif var == 'has_url_column':
+                                        st.session_state.has_url_column = True
+                                    elif var == 'url_column':
+                                        st.session_state.url_column = None
+                                st.warning("Some session state variables were missing and have been initialized.")
+                            
                             system_prompt = """
             You are an expert summarizer skilled in creating concise and relevant summaries.
             You will be given text and an objective context. Please produce a clear, cohesive, and thematically relevant summary.
@@ -1002,69 +1180,178 @@ with tab3:
                             if not openai_api_key:
                                 st.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
                             else:
-                                llm = ChatOpenAI(api_key=openai_api_key, model_name='gpt-4o', temperature=temperature, max_tokens=max_tokens)
+                                # Check if we can reuse existing summaries
+                                reuse_summaries = False
+                                if ('summary_results' in st.session_state and 
+                                    'summary_params' in st.session_state and
+                                    st.session_state['summary_params'].get('temperature') == temperature and
+                                    st.session_state['summary_params'].get('max_tokens') == max_tokens and
+                                    str(st.session_state['summary_params'].get('selected_topics')) == str(selected_topics)):
+                                    
+                                    # Ensure all required session state variables are available
+                                    if 'enable_references' not in st.session_state:
+                                        st.session_state.enable_references = True
+                                    if 'reference_id_column' not in st.session_state:
+                                        st.session_state.reference_id_column = None
+                                    if 'has_url_column' not in st.session_state:
+                                        st.session_state.has_url_column = True
+                                    if 'url_column' not in st.session_state:
+                                        st.session_state.url_column = None
+                                    
+                                    st.success("Using cached summary results.")
+                                    high_level_summary = st.session_state.get('high_level_summary', '')
+                                    summaries = st.session_state.get('summary_results', [])
+                                    
+                                    # Display the cached high-level summary
+                                    st.write("### High-Level Summary:")
+                                    st.write(high_level_summary)
+                                    
+                                    # Display the cached cluster-specific summaries
+                                    if summaries:
+                                        st.write("### Summaries per Selected Cluster")
+                                        for summary_data in summaries:
+                                            topic_val = summary_data['Topic']
+                                            st.write(f"#### Cluster {topic_val}")
+                                            
+                                            # Check if there was an error
+                                            if 'Error' in summary_data:
+                                                st.warning(f"Warning: {summary_data.get('Error')}")
+                                            
+                                            # Display the summary
+                                            if 'Enhanced_Summary' in summary_data:
+                                                st.markdown(summary_data['Enhanced_Summary'], unsafe_allow_html=True)
+                                            else:
+                                                st.write(summary_data['Summary'])
+                                        
+                                        # Add download button for summaries
+                                        summary_df = pd.DataFrame(summaries)
+                                        # Remove HTML content for CSV download
+                                        if 'Enhanced_Summary' in summary_df.columns:
+                                            download_df = summary_df[['Topic', 'Summary']]
+                                        else:
+                                            download_df = summary_df
+                                        
+                                        # Create CSV download
+                                        csv = download_df.to_csv(index=False)
+                                        st.download_button(
+                                            label="Download Summaries as CSV",
+                                            data=csv,
+                                            file_name="cluster_summaries.csv",
+                                            mime="text/csv"
+                                        )
+                                        
+                                        # Store the summary results for caching
+                                        st.session_state['summary_results'] = summaries
+                                        st.session_state['summary_params'] = {
+                                            'temperature': temperature,
+                                            'max_tokens': max_tokens,
+                                            'selected_topics': selected_topics,
+                                            'enable_references': st.session_state.enable_references,
+                                            'reference_id_column': st.session_state.reference_id_column,
+                                            'has_url_column': st.session_state.has_url_column,
+                                            'url_column': st.session_state.url_column
+                                        }
+                                    
+                                    # Skip the rest of the summarization process
+                                    reuse_summaries = True
+                                
+                                if not reuse_summaries:
+                                    llm = ChatOpenAI(api_key=openai_api_key, model_name='gpt-4o', temperature=temperature, max_tokens=max_tokens)
 
-                                if selected_topics:
-                                    # Convert selected topics back to float for filtering
-                                    selected_topics_float = [float(t) for t in selected_topics]
-                                    df_to_summarize = df_summ[df_summ['Topic'].isin(selected_topics_float)]
-                                else:
-                                    df_to_summarize = df_summ
-
-                                if df_to_summarize.empty:
-                                    st.warning("No documents match the selected topics for summarization.")
-                                else:
-                                    # High-level summary across all selected topics
-                                    all_texts = df_to_summarize['text'].tolist()
-                                    combined_text = " ".join(all_texts)
-                                    if combined_text.strip() == "":
-                                        st.warning("No text data available for summarization.")
+                                    if selected_topics:
+                                        # Convert selected topics back to float for filtering
+                                        selected_topics_float = [float(t) for t in selected_topics]
+                                        df_to_summarize = df_summ[df_summ['Topic'].isin(selected_topics_float)]
                                     else:
-                                        user_prompt = f"**Text to summarize**: {combined_text}"
+                                        df_to_summarize = df_summ
+
+                                    with st.spinner("Generating high-level summary..."):
+                                        # Generate high-level summary
+                                        docs_text = " ".join(df_to_summarize['text'].tolist())
+                                        user_prompt = f"**Text to summarize**: {docs_text}"
                                         system_message = SystemMessagePromptTemplate.from_template(system_prompt)
                                         human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
                                         chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
 
-                                        with st.spinner("Generating high-level summary..."):
-                                            chain = LLMChain(llm=llm, prompt=chat_prompt)
-                                            response = chain.run(user_prompt=user_prompt)
+                                        chain = LLMChain(llm=llm, prompt=chat_prompt)
+                                        response = chain.run(user_prompt=user_prompt)
                                         high_level_summary = response.strip()
 
-                                        # NEW: Possibly add references to the high-level summary
-                                        if st.session_state.enable_references and st.session_state.reference_id_column:
-                                            with st.spinner("Adding references to high-level summary..."):
-                                                enhanced_summary = add_references_to_summary(
-                                                    high_level_summary,
-                                                    df_to_summarize,
-                                                    st.session_state.reference_id_column,
-                                                    st.session_state.url_column if st.session_state.has_url_column else None,
-                                                    llm
-                                                )
-                                            st.write("### High-Level Summary (with references):")
-                                            st.markdown(enhanced_summary, unsafe_allow_html=True)
-                                            
-                                            # Also provide a way to view the original summary
-                                            with st.expander("View original summary (without references)"):
-                                                st.write(high_level_summary)
-                                        else:
-                                            st.write("### High-Level Summary:")
+                                        # Store the summary parameters for caching
+                                        st.session_state['summary_params'] = {
+                                            'temperature': temperature,
+                                            'max_tokens': max_tokens,
+                                            'selected_topics': selected_topics,
+                                            'enable_references': st.session_state.enable_references,
+                                            'reference_id_column': st.session_state.reference_id_column
+                                        }
+                                        st.session_state['high_level_summary'] = high_level_summary
+
+                                    # Display high-level summary with references if enabled
+                                    if st.session_state.enable_references and st.session_state.reference_id_column:
+                                        with st.spinner("Adding references to high-level summary..."):
+                                            enhanced_summary = add_references_to_summary(
+                                                high_level_summary,
+                                                df_to_summarize,
+                                                st.session_state.reference_id_column,
+                                                st.session_state.url_column if st.session_state.has_url_column else None,
+                                                llm
+                                            )
+                                        st.write("### High-Level Summary (with references):")
+                                        st.markdown(enhanced_summary, unsafe_allow_html=True)
+                                        
+                                        # Also provide a way to view the original summary
+                                        with st.expander("View original summary (without references)"):
                                             st.write(high_level_summary)
+                                    else:
+                                        st.write("### High-Level Summary:")
+                                        st.write(high_level_summary)
 
-                                        # Summaries per cluster if multiple clusters
-                                        if len(selected_topics) > 1:
-                                            grouped_list = list(df_to_summarize.groupby('Topic'))
-                                        else:
-                                            grouped_list = list(df_to_summarize.groupby('Topic')) if selected_topics else []
+                                    # Summaries per cluster if multiple clusters
+                                    if len(selected_topics) > 1:
+                                        grouped_list = list(df_to_summarize.groupby('Topic'))
+                                    else:
+                                        grouped_list = list(df_to_summarize.groupby('Topic')) if selected_topics else []
 
-                                        if grouped_list:
-                                            st.write("### Summaries per Selected Cluster")
-                                            progress_bar = st.progress(0)
-                                            total_clusters = len(grouped_list)
-                                            summaries = []
+                                    if grouped_list:
+                                        st.write("### Summaries per Selected Cluster")
+                                        progress_bar = st.progress(0)
+                                        total_clusters = len(grouped_list)
+                                        summaries = []
+                                        
+                                        # Ensure all required session state variables are available
+                                        if 'enable_references' not in st.session_state:
+                                            st.session_state.enable_references = True
+                                        if 'reference_id_column' not in st.session_state:
+                                            st.session_state.reference_id_column = None
+                                        if 'has_url_column' not in st.session_state:
+                                            st.session_state.has_url_column = True
+                                        if 'url_column' not in st.session_state:
+                                            st.session_state.url_column = None
+                                                
+                                        # Get the values to pass to the worker function
+                                        enable_refs = st.session_state.enable_references
+                                        ref_id_col = st.session_state.reference_id_column
+                                        has_url_col = st.session_state.has_url_column
+                                        url_col = st.session_state.url_column
 
-                                            def generate_summary_per_topic(topic_group_tuple):
-                                                topic_val, group_df = topic_group_tuple
-                                                docs_text = " ".join(group_df['text'].tolist())
+                                        def generate_summary_per_topic(topic_group_tuple, enable_refs, ref_id_col, has_url_col, url_col):
+                                            topic_val, group_df = topic_group_tuple
+                                            try:
+                                                # Ensure we have text data to summarize
+                                                if 'text' not in group_df.columns or group_df['text'].empty:
+                                                    return {
+                                                        'Topic': topic_val,
+                                                        'Summary': "No text data available for summarization.",
+                                                        'Error': "Missing text data"
+                                                    }
+                                                
+                                                # Limit text length to avoid token limits
+                                                docs_text = " ".join(group_df['text'].astype(str).tolist())
+                                                # Truncate if too long (rough estimate to avoid token limits)
+                                                if len(docs_text) > 15000:
+                                                    docs_text = docs_text[:15000] + "..."
+                                                    
                                                 user_prompt_local = f"**Text to summarize**: {docs_text}"
                                                 system_message_local = SystemMessagePromptTemplate.from_template(system_prompt)
                                                 human_message_local = HumanMessagePromptTemplate.from_template("{user_prompt}")
@@ -1075,64 +1362,99 @@ with tab3:
                                                 summary_local = response_local.strip()
 
                                                 # If references are enabled, create an enhanced summary
-                                                if st.session_state.enable_references and st.session_state.reference_id_column:
-                                                    summary_with_refs = add_references_to_summary(
-                                                        summary_local,
-                                                        group_df,
-                                                        st.session_state.reference_id_column,
-                                                        st.session_state.url_column if st.session_state.has_url_column else None,
-                                                        llm
-                                                    )
-                                                    return {
-                                                        'Topic': topic_val,
-                                                        'Summary': summary_local,
-                                                        'Enhanced_Summary': summary_with_refs
-                                                    }
+                                                if enable_refs and ref_id_col:
+                                                    try:
+                                                        summary_with_refs = add_references_to_summary(
+                                                            summary_local,
+                                                            group_df,
+                                                            ref_id_col,
+                                                            url_col if has_url_col else None,
+                                                            llm
+                                                        )
+                                                        return {
+                                                            'Topic': topic_val,
+                                                            'Summary': summary_local,
+                                                            'Enhanced_Summary': summary_with_refs
+                                                        }
+                                                    except Exception as e:
+                                                        # If reference enhancement fails, return the basic summary
+                                                        return {
+                                                            'Topic': topic_val,
+                                                            'Summary': summary_local,
+                                                            'Error': f"Reference enhancement failed: {str(e)}"
+                                                        }
                                                 else:
                                                     return {
                                                         'Topic': topic_val,
                                                         'Summary': summary_local
                                                     }
+                                            except Exception as e:
+                                                # Handle any errors in the summarization process
+                                                return {
+                                                    'Topic': topic_val,
+                                                    'Summary': f"Error generating summary: {str(e)}",
+                                                    'Error': str(e)
+                                                }
 
-                                            with st.spinner("Summarizing each selected cluster..."):
-                                                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                                                    futures = {
-                                                        executor.submit(generate_summary_per_topic, item): item[0]
-                                                        for item in grouped_list
-                                                    }
-                                                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                                                        result = future.result()
-                                                        summaries.append(result)
-                                                        progress_bar.progress((i + 1) / total_clusters)
-                                            progress_bar.empty()
+                                        with st.spinner("Summarizing each selected cluster..."):
+                                            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                                                futures = {
+                                                    executor.submit(generate_summary_per_topic, item, enable_refs, ref_id_col, has_url_col, url_col): item[0]
+                                                    for item in grouped_list
+                                                }
+                                                for future in concurrent.futures.as_completed(futures):
+                                                    result = future.result()
+                                                    summaries.append(result)
+                                                    progress_bar.progress((len(summaries)) / total_clusters)
 
-                                            if summaries:
-                                                summary_df = pd.DataFrame(summaries)
-                                                # Display enhanced summaries in a more readable format
-                                                if st.session_state.enable_references and 'Enhanced_Summary' in summary_df.columns:
-                                                    st.write("### Summaries per Cluster (with references):")
-                                                    for idx, row in summary_df.iterrows():
-                                                        st.write(f"**Topic {int(row['Topic'])}**")
-                                                        st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
-                                                        st.write("---")
-                                                    
-                                                    with st.expander("View original summaries in table format"):
-                                                        display_df = summary_df[['Topic', 'Summary']]
-                                                        st.write(display_df)
-                                                else:
-                                                    st.write("### Summaries per Cluster:")
-                                                    st.write(summary_df)
+                                        # Sort summaries by topic number
+                                        summaries.sort(key=lambda x: x['Topic'])
 
-                                                # Prepare a CSV download (excluding HTML reference column for clarity)
-                                                if 'Enhanced_Summary' in summary_df.columns:
-                                                    download_df = summary_df[['Topic', 'Summary']]
-                                                else:
-                                                    download_df = summary_df
-                                                csv = download_df.to_csv(index=False)
-                                                b64 = base64.b64encode(csv.encode()).decode()
-                                                href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
-                                                st.markdown(href, unsafe_allow_html=True)
-
+                                        # Display summaries
+                                        for summary_data in summaries:
+                                            topic_val = summary_data['Topic']
+                                            st.write(f"#### Cluster {topic_val}")
+                                            
+                                            # Check if there was an error
+                                            if 'Error' in summary_data:
+                                                st.warning(f"Warning: {summary_data.get('Error')}")
+                                            
+                                            # Display the summary
+                                            if 'Enhanced_Summary' in summary_data:
+                                                st.markdown(summary_data['Enhanced_Summary'], unsafe_allow_html=True)
+                                            else:
+                                                st.write(summary_data['Summary'])
+                                        
+                                        # Add download button for summaries
+                                        if summaries:
+                                            # Create a DataFrame for download
+                                            summary_df = pd.DataFrame(summaries)
+                                            # Remove HTML content for CSV download
+                                            if 'Enhanced_Summary' in summary_df.columns:
+                                                download_df = summary_df[['Topic', 'Summary']]
+                                            else:
+                                                download_df = summary_df
+                                            
+                                            # Create CSV download
+                                            csv = download_df.to_csv(index=False)
+                                            st.download_button(
+                                                label="Download Summaries as CSV",
+                                                data=csv,
+                                                file_name="cluster_summaries.csv",
+                                                mime="text/csv"
+                                            )
+                                            
+                                            # Store the summary results for caching
+                                            st.session_state['summary_results'] = summaries
+                                            st.session_state['summary_params'] = {
+                                                'temperature': temperature,
+                                                'max_tokens': max_tokens,
+                                                'selected_topics': selected_topics,
+                                                'enable_references': st.session_state.enable_references,
+                                                'reference_id_column': st.session_state.reference_id_column,
+                                                'has_url_column': st.session_state.has_url_column,
+                                                'url_column': st.session_state.url_column
+                                            }
                     else:
                         st.warning("Please perform clustering first to generate topics.")
             else:
@@ -1143,7 +1465,7 @@ with tab3:
         st.warning("Please select a dataset and select text columns to proceed.")
 
 # Internal Validation Tab
-with tab_internal:
+with tabs[4]:
     st.header("Internal Validation & Debugging")
 
     hierarchy = st.session_state.get('hierarchy', pd.DataFrame())
