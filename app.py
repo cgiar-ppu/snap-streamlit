@@ -151,24 +151,50 @@ if dataset_option == 'PRMS 2022+2023 QAed':
         df_cols = df.columns.tolist()
 
         # Additional filter columns
-        st.write("**Select Filters**")
-        all_columns = df.columns.tolist()
-        selected_additional_cols = st.multiselect("Select columns from your dataset to use as filters:", all_columns, default=st.session_state.get('additional_filters_selected', []))
-        st.session_state['additional_filters_selected'] = selected_additional_cols
+        st.subheader("Select Filters")
+        
+        # Initialize session state for filters if not exists
+        if 'additional_filters_selected' not in st.session_state:
+            st.session_state['additional_filters_selected'] = []
+        if 'filter_values' not in st.session_state:
+            st.session_state['filter_values'] = {}
 
-        # For each chosen filter column, show a multiselect of unique values
-        for col_name in selected_additional_cols:
-            # If not already in session state, initialize
-            if f'selected_filter_{col_name}' not in st.session_state:
-                st.session_state[f'selected_filter_{col_name}'] = []
-            unique_vals = df[col_name].dropna().unique().tolist()
-            # Sort for consistency
-            unique_vals = sorted(unique_vals)
-            selected_vals = st.multiselect(f"Filter by {col_name}", options=unique_vals, default=st.session_state[f'selected_filter_{col_name}'])
-            st.session_state[f'selected_filter_{col_name}'] = selected_vals
+        with st.form("filter_selection_form"):
+            all_columns = df.columns.tolist()
+            selected_additional_cols = st.multiselect(
+                "Select columns from your dataset to use as filters:",
+                all_columns,
+                default=st.session_state['additional_filters_selected']
+            )
+            add_filters_submitted = st.form_submit_button("Add Additional Filters")
+            
+        if add_filters_submitted:
+            # Only update if there's a change
+            if selected_additional_cols != st.session_state['additional_filters_selected']:
+                st.session_state['additional_filters_selected'] = selected_additional_cols
+                # Reset values for removed columns
+                st.session_state['filter_values'] = {
+                    k: v for k, v in st.session_state['filter_values'].items() 
+                    if k in selected_additional_cols
+                }
+
+        # Show dynamic filters in a new form if there are any selected columns
+        if st.session_state['additional_filters_selected']:
+            st.subheader("Apply Filters")
+            with st.form("apply_filters_form"):
+                for col_name in st.session_state['additional_filters_selected']:
+                    unique_vals = sorted(df[col_name].dropna().unique().tolist())
+                    selected_vals = st.multiselect(
+                        f"Filter by {col_name}",
+                        options=unique_vals,
+                        default=st.session_state['filter_values'].get(col_name, [])
+                    )
+                    st.session_state['filter_values'][col_name] = selected_vals
+                
+                apply_filters_submitted = st.form_submit_button("Apply Filters to Dataset")
 
         # Text columns selection
-        st.write("**Select Text Columns for Embedding**")
+        st.subheader("**Select Text Columns for Embedding**")
         text_columns_selected = st.multiselect(
             "Text Columns:",
             all_columns,
@@ -180,33 +206,57 @@ if dataset_option == 'PRMS 2022+2023 QAed':
         # Apply filters to create filtered_df
         filtered_df = df.copy()
 
-        # Apply additional filters
-        for col_name in selected_additional_cols:
-            selected_vals = st.session_state[f'selected_filter_{col_name}']
-            if selected_vals:
-                filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+        # Apply additional filters only when the apply button is clicked
+        if 'apply_filters_submitted' in locals() and apply_filters_submitted:
+            for col_name in st.session_state['additional_filters_selected']:
+                selected_vals = st.session_state['filter_values'].get(col_name, [])
+                if selected_vals:
+                    filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+            st.success("Filters applied successfully!")
+            # Store both the filtered data and the filter state
+            st.session_state['filtered_df'] = filtered_df.copy()
+            st.session_state['filter_state'] = {
+                'applied': True,
+                'filters': st.session_state['filter_values'].copy()
+            }
+            # Clear any existing clustering results since they're no longer valid
+            if 'clustered_data' in st.session_state:
+                del st.session_state['clustered_data']
+            if 'topic_model' in st.session_state:
+                del st.session_state['topic_model']
+            if 'current_clustering_data' in st.session_state:
+                del st.session_state['current_clustering_data']
+            if 'current_clustering_option' in st.session_state:
+                del st.session_state['current_clustering_option']
+            if 'hierarchy' in st.session_state:
+                del st.session_state['hierarchy']
 
-        st.session_state['filtered_df'] = filtered_df
+        elif 'filter_state' in st.session_state and st.session_state['filter_state']['applied']:
+            # Reapply existing filters
+            for col_name, selected_vals in st.session_state['filter_state']['filters'].items():
+                if selected_vals:
+                    filtered_df = filtered_df[filtered_df[col_name].isin(selected_vals)]
+            st.session_state['filtered_df'] = filtered_df.copy()
 
-        st.write("Filtered Data Preview:")
-        st.write(filtered_df.head())
+        # Only show preview if we have data
+        if 'filtered_df' in st.session_state:
+            st.write("Filtered Data Preview:")
+            st.write(st.session_state['filtered_df'].head())
+            st.write(f"Total number of results: {len(st.session_state['filtered_df'])}")
 
-        # Add total count of results
-        st.write(f"Total number of results: {len(filtered_df)}")
+            # Provide download button for filtered data
+            output = io.BytesIO()
+            writer = pd.ExcelWriter(output, engine='openpyxl')
+            st.session_state['filtered_df'].to_excel(writer, index=False)
+            writer.close()
+            processed_data = output.getvalue()
 
-        # Provide download button for filtered data
-        output = io.BytesIO()
-        writer = pd.ExcelWriter(output, engine='openpyxl')
-        filtered_df.to_excel(writer, index=False)
-        writer.close()
-        processed_data = output.getvalue()
-
-        st.download_button(
-            label="Download Filtered Data",
-            data=processed_data,
-            file_name='filtered_data.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
+            st.download_button(
+                label="Download Filtered Data",
+                data=processed_data,
+                file_name='filtered_data.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
     else:
         st.warning("Please ensure the default dataset exists in the 'input' directory.")
 else:
@@ -223,7 +273,7 @@ else:
             df_cols = df.columns.tolist()
 
             # Additional filters logic for uploaded dataset
-            st.write("**Select Text Columns for Embedding**")
+            st.subheader("**Select Text Columns for Embedding**")
             text_columns_selected = st.multiselect("Text Columns:", df_cols, default=df_cols[:1] if df_cols else [])
             st.session_state['text_columns'] = text_columns_selected
 
@@ -634,7 +684,10 @@ with tab2:
             col1, col2 = st.columns(2)
             with col1:
                 with st.form("clustering_parameters"):
-                    clustering_option = st.radio("Select data for clustering:", ('Full Dataset', 'Semantic Search Results'))
+                    clustering_option = st.radio(
+                        "Select data for clustering:",
+                        ('Full Dataset', 'Filtered Dataset', 'Semantic Search Results')
+                    )
                     if 'min_cluster_size' not in st.session_state:
                         st.session_state.min_cluster_size = 5
                     min_cluster_size_val = st.slider(
@@ -649,14 +702,26 @@ with tab2:
 
             if clustering_option == 'Semantic Search Results':
                 if st.session_state.get('search_results') is not None and not st.session_state['search_results'].empty:
-                    df_to_cluster = st.session_state['search_results']
+                    df_to_cluster = st.session_state['search_results'].copy()
                 else:
                     st.warning("No search results found. Please perform a semantic search first.")
                     df_to_cluster = None
-            else:
-                df_to_cluster = st.session_state['filtered_df']
+            elif clustering_option == 'Filtered Dataset':
+                if ('filtered_df' in st.session_state and 
+                    not st.session_state['filtered_df'].empty and 
+                    'filter_state' in st.session_state and 
+                    st.session_state['filter_state']['applied']):
+                    df_to_cluster = st.session_state['filtered_df'].copy()
+                else:
+                    st.warning("No filtered dataset available. Please apply filters first.")
+                    df_to_cluster = None
+            else:  # Full Dataset
+                df_to_cluster = st.session_state['df'].copy()
 
             if df_to_cluster is not None and not df_to_cluster.empty:
+                # Store the current dataset choice in session state
+                st.session_state['current_clustering_option'] = clustering_option
+                st.session_state['current_clustering_data'] = df_to_cluster.copy()
                 text_columns = st.session_state.get('text_columns', [])
                 if not text_columns:
                     st.warning("No text columns selected. Please select text columns to embed before clustering.")
@@ -684,6 +749,7 @@ with tab2:
                                 filtered_text = ' '.join([word for word in word_tokens if word.lower() not in stop_words])
                                 texts_cleaned.append(filtered_text)
 
+                            # Important: Use the indices from our filtered/selected dataset
                             selected_indices = dfc.index
                             embeddings_clustering = embeddings[selected_indices]
 
@@ -701,58 +767,40 @@ with tab2:
                                     topic_model = BERTopic(embedding_model=sentence_model, 
                                                          hdbscan_model=hdbscan_model)
                                     try:
-                                        # Ensure embeddings are on CPU for clustering
+                                        # Ensure we're using the correct texts for clustering
                                         topics, _ = topic_model.fit_transform(texts_cleaned, embeddings=embeddings_for_clustering)
                                         dfc['Topic'] = topics
                                         st.session_state['topic_model'] = topic_model
                                         # Store the clustered data in session state
                                         st.session_state['clustered_data'] = dfc.copy()
-                                        # Also update the filtered_df with topics
-                                        if clustering_option == 'Full Dataset':
+                                        
+                                        # Only update the filtered_df with topics if we're working with it
+                                        if clustering_option == 'Filtered Dataset':
                                             st.session_state['filtered_df'].loc[dfc.index, 'Topic'] = dfc['Topic']
 
                                         # Add topic overview table first
                                         st.subheader("Topic Overview")
                                         
-                                        # Get unique topics and their counts
-                                        topic_counts = dfc['Topic'].value_counts().sort_index()
-                                        
-                                        # Create overview data
-                                        overview_data = []
-                                        for topic_id in topic_counts.index:
-                                            # Get top words for the topic
-                                            top_words = topic_model.get_topic(topic_id)
-                                            # Format keywords and their weights
+                                        # Get cluster info: count, top keywords
+                                        cluster_info = []
+                                        for t in topics:
+                                            # Use dfc which has the Topic column we just created
+                                            cluster_docs = dfc[dfc['Topic'] == t]
+                                            count = len(cluster_docs)
+                                            top_words = topic_model.get_topic(t)
                                             if top_words:
-                                                keywords = ", ".join([f"{word} ({weight:.3f})" for word, weight in top_words[:5]])
+                                                top_keywords = ", ".join([w[0] for w in top_words[:5]])
                                             else:
-                                                keywords = "N/A"
-                                            
-                                            # Add to overview data
-                                            overview_data.append({
-                                                "Topic": int(topic_id),
-                                                "Size": topic_counts[topic_id],
-                                                "% of Total": f"{(topic_counts[topic_id] / len(dfc) * 100):.1f}%",
-                                                "Top Keywords (with weights)": keywords
-                                            })
-                                        
-                                        # Create and display overview DataFrame
-                                        overview_df = pd.DataFrame(overview_data)
-                                        st.dataframe(
-                                            overview_df,
-                                            column_config={
-                                                "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
-                                                "Size": st.column_config.NumberColumn("Size", help="Number of documents in this topic"),
-                                                "% of Total": st.column_config.TextColumn("% of Total", help="Percentage of total documents"),
-                                                "Top Keywords (with weights)": st.column_config.TextColumn(
-                                                    "Top Keywords (with weights)",
-                                                    help="Top 5 keywords and their importance weights for this topic"
-                                                )
-                                            }
-                                        )
+                                                top_keywords = "N/A"
+                                            cluster_info.append((t, count, top_keywords))
+                                        cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+
+                                        st.write("Available Clusters for Summarization:")
+                                        st.dataframe(cluster_df)
 
                                         # Then show full clustering results
                                         st.subheader("Clustering Results")
+                                        # Only show the relevant columns from our working dataset
                                         columns_to_display = [col for col in dfc.columns if col not in ['text']]
                                         st.write(dfc[columns_to_display])
 
@@ -885,7 +933,8 @@ with tab3:
                         # Get cluster info: count, top keywords
                         cluster_info = []
                         for t in topics:
-                            cluster_docs = df_summ[df_summ['Topic'] == t]
+                            # Use dfc which has the Topic column we just created
+                            cluster_docs = dfc[dfc['Topic'] == t]
                             count = len(cluster_docs)
                             top_words = topic_model.get_topic(t)
                             if top_words:
