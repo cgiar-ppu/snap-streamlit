@@ -91,7 +91,7 @@ def init_nltk_resources():
     try:
         nltk.data.find('tokenizers/punkt')
     except LookupError:
-        nltk.download('punkt')
+        nltk.download('punkt_tab')
     
     # Explicitly initialize the punkt tokenizer to catch any issues early
     try:
@@ -100,7 +100,7 @@ def init_nltk_resources():
         tokenizer.tokenize("Test sentence.")  # Test the tokenizer
     except Exception as e:
         st.error(f"Error initializing NLTK tokenizer: {e}")
-        nltk.download('punkt', quiet=False)  # Try downloading again with verbose output
+        nltk.download('punkt_tab', quiet=False)  # Try downloading again with verbose output
 
 init_nltk_resources()
 
@@ -963,7 +963,7 @@ with tab_clustering:
                                     word_tokens = word_tokenize(text)
                                 except LookupError:
                                     # If punkt is missing, try downloading it again
-                                    nltk.download('punkt', quiet=False)
+                                    nltk.download('punkt_tab', quiet=False)
                                     word_tokens = word_tokenize(text)
                                 except Exception as e:
                                     # If word_tokenize fails, fall back to simple splitting
