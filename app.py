@@ -93,9 +93,10 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     # If no LLM is provided, we can't do source attribution
     if llm is None:
         return summary
-    
-    # Split the summary into sentences for processing
-    sentences = re.split(r'(?<=[.!?])\s+', summary)
+
+    # Split the summary into paragraphs first
+    paragraphs = summary.split('\n\n')
+    enhanced_paragraphs = []
 
     # Prepare source texts with their reference IDs
     source_texts = []
@@ -121,28 +122,84 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     # Define the system prompt for source attribution
     system_prompt = """
     You are an expert at identifying the source of information. You will be given:
-    1. A sentence from a summary
+    1. A sentence or bullet point from a summary
     2. A list of source texts with their IDs
     
-    Your task is to identify which source text(s) the sentence most likely came from.
-    Return ONLY the IDs of the source texts that contributed to the sentence, separated by commas.
-    If you cannot confidently attribute the sentence to any source, return "unknown".
+    Your task is to identify which source text(s) the text most likely came from.
+    Return ONLY the IDs of the source texts that contributed to the text, separated by commas.
+    If you cannot confidently attribute the text to any source, return "unknown".
     """
 
-    enhanced_sentences = []
-    batch_size = 3  # smaller batch to reduce token usage
+    for paragraph in paragraphs:
+        if not paragraph.strip():
+            enhanced_paragraphs.append('')
+            continue
 
-    # Process sentences in small batches
-    for i in range(0, len(sentences), batch_size):
-        batch = sentences[i:i+batch_size]
-        batch_results = []
+        # Check if it's a bullet point list
+        if any(line.strip().startswith('- ') or line.strip().startswith('* ') for line in paragraph.split('\n')):
+            # Handle bullet points
+            bullet_lines = paragraph.split('\n')
+            enhanced_bullets = []
+            for line in bullet_lines:
+                if not line.strip():
+                    enhanced_bullets.append(line)
+                    continue
+                
+                if line.strip().startswith('- ') or line.strip().startswith('* '):
+                    # Process each bullet point
+                    user_prompt = f"""
+                    Text: {line.strip()}
 
-        for sentence in batch:
-            sent_str = sentence.strip()
-            if sent_str:
-                # Create the prompt for this sentence
+                    Source texts:
+                    {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
+
+                    Which source ID(s) did this text most likely come from? Return only the ID(s) separated by commas, or "unknown".
+                    """
+
+                    try:
+                        system_message = SystemMessagePromptTemplate.from_template(system_prompt)
+                        human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                        chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
+                        chain = LLMChain(llm=llm, prompt=chat_prompt)
+                        response = chain.run(user_prompt=user_prompt)
+                        source_ids = response.strip()
+
+                        if source_ids.lower() == "unknown":
+                            enhanced_bullets.append(line)
+                        else:
+                            # Extract just the IDs
+                            source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
+                            source_ids = re.sub(r'\s+', '', source_ids)
+                            ids = [id_.strip() for id_ in source_ids.split(',') if id_.strip()]
+                            
+                            if ids:
+                                ref_parts = []
+                                for id_ in ids:
+                                    if id_ in url_map:
+                                        ref_parts.append(f'<a href="{url_map[id_]}" target="_blank">{id_}</a>')
+                                    else:
+                                        ref_parts.append(id_)
+                                ref_string = ", ".join(ref_parts)
+                                enhanced_bullets.append(f"{line} [{ref_string}]")
+                            else:
+                                enhanced_bullets.append(line)
+                    except Exception:
+                        enhanced_bullets.append(line)
+                else:
+                    enhanced_bullets.append(line)
+            
+            enhanced_paragraphs.append('\n'.join(enhanced_bullets))
+        else:
+            # Handle regular paragraphs
+            sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+            enhanced_sentences = []
+
+            for sentence in sentences:
+                if not sentence.strip():
+                    continue
+
                 user_prompt = f"""
-                Sentence: {sent_str}
+                Sentence: {sentence.strip()}
 
                 Source texts:
                 {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
@@ -150,49 +207,40 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
                 Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
                 """
 
-                # Create the messages for the chat
-                system_message = SystemMessagePromptTemplate.from_template(system_prompt)
-                human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
-
                 try:
+                    system_message = SystemMessagePromptTemplate.from_template(system_prompt)
+                    human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                    chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
                     chain = LLMChain(llm=llm, prompt=chat_prompt)
                     response = chain.run(user_prompt=user_prompt)
                     source_ids = response.strip()
 
                     if source_ids.lower() == "unknown":
-                        source_ids = ""
+                        enhanced_sentences.append(sentence)
                     else:
-                        # Extract just the IDs, removing extraneous chars
+                        # Extract just the IDs
                         source_ids = re.sub(r'[^0-9,\s]', '', source_ids)
                         source_ids = re.sub(r'\s+', '', source_ids)
-
-                    batch_results.append((sentence, source_ids))
+                        ids = [id_.strip() for id_ in source_ids.split(',') if id_.strip()]
+                        
+                        if ids:
+                            ref_parts = []
+                            for id_ in ids:
+                                if id_ in url_map:
+                                    ref_parts.append(f'<a href="{url_map[id_]}" target="_blank">{id_}</a>')
+                                else:
+                                    ref_parts.append(id_)
+                            ref_string = ", ".join(ref_parts)
+                            enhanced_sentences.append(f"{sentence} [{ref_string}]")
+                        else:
+                            enhanced_sentences.append(sentence)
                 except Exception:
-                    # If there's an error, just use the sentence without attribution
-                    batch_results.append((sentence, ""))
-            else:
-                batch_results.append((sentence, ""))
+                    enhanced_sentences.append(sentence)
 
-        # Turn each sentence into an enhanced sentence
-        for sentence, source_ids in batch_results:
-            if source_ids:
-                ids = [id_.strip() for id_ in source_ids.split(',') if id_.strip()]
-                ref_parts = []
-                for id_ in ids:
-                    # If there's a URL for that reference ID, make it clickable
-                    if id_ in url_map:
-                        ref_parts.append(f'<a href="{url_map[id_]}" target="_blank">{id_}</a>')
-                    else:
-                        ref_parts.append(id_)
-                ref_string = ", ".join(ref_parts)
-                enhanced_sentence = f"{sentence} [{ref_string}]"
-                enhanced_sentences.append(enhanced_sentence)
-            else:
-                enhanced_sentences.append(sentence)
+            enhanced_paragraphs.append(' '.join(enhanced_sentences))
 
-    enhanced_summary = " ".join(enhanced_sentences)
-    return enhanced_summary
+    # Join paragraphs back together with double newlines to preserve formatting
+    return '\n\n'.join(enhanced_paragraphs)
 
 
 ###############################################################################
