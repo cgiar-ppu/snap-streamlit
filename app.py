@@ -92,6 +92,15 @@ def init_nltk_resources():
         nltk.data.find('tokenizers/punkt')
     except LookupError:
         nltk.download('punkt')
+    
+    # Explicitly initialize the punkt tokenizer to catch any issues early
+    try:
+        from nltk.tokenize import PunktSentenceTokenizer
+        tokenizer = PunktSentenceTokenizer()
+        tokenizer.tokenize("Test sentence.")  # Test the tokenizer
+    except Exception as e:
+        st.error(f"Error initializing NLTK tokenizer: {e}")
+        nltk.download('punkt', quiet=False)  # Try downloading again with verbose output
 
 init_nltk_resources()
 
@@ -948,9 +957,25 @@ with tab_clustering:
                         stop_words = set(stopwords.words('english'))
                         texts_cleaned = []
                         for text in dfc['text'].tolist():
-                            word_tokens = word_tokenize(text)
-                            filtered_text = ' '.join([w for w in word_tokens if w.lower() not in stop_words])
-                            texts_cleaned.append(filtered_text)
+                            try:
+                                # First try with word_tokenize
+                                try:
+                                    word_tokens = word_tokenize(text)
+                                except LookupError:
+                                    # If punkt is missing, try downloading it again
+                                    nltk.download('punkt', quiet=False)
+                                    word_tokens = word_tokenize(text)
+                                except Exception as e:
+                                    # If word_tokenize fails, fall back to simple splitting
+                                    st.warning(f"Using fallback tokenization due to error: {e}")
+                                    word_tokens = text.split()
+                                
+                                filtered_text = ' '.join([w for w in word_tokens if w.lower() not in stop_words])
+                                texts_cleaned.append(filtered_text)
+                            except Exception as e:
+                                st.error(f"Error processing text: {e}")
+                                # Add the original text if processing fails
+                                texts_cleaned.append(text)
 
                         try:
                             # Build the HDBSCAN model
@@ -1597,6 +1622,13 @@ Your role is to:
 3. When referencing specific results, use their row index or ID if available
 4. Clearly state if information is not available in the results
 5. Maintain a professional and analytical tone
+6. Format your responses using Markdown:
+   - Use **bold** for emphasis
+   - Use bullet points and numbered lists for structured information
+   - Create tables using Markdown syntax when presenting structured data
+   - Use backticks for code or technical terms
+   - Include hyperlinks when referencing external sources
+   - Use headings (###) to organize long responses
 
 The data is provided in a structured format where:""" + ("""
 - Each result contains multiple fields
@@ -1688,9 +1720,11 @@ The data is provided in a structured format where:""" + ("""
             st.subheader("Chat History")
             for message in st.session_state.chat_history:
                 if message["role"] == "user":
-                    st.write("You:", message["content"])
+                    st.write("**You:**", message["content"])
                 else:
-                    st.write("Assistant:", message["content"])
+                    st.write("**Assistant:**")
+                    st.markdown(message["content"], unsafe_allow_html=True)
+                st.write("---")  # Add a separator between messages
         else:
             st.warning("No text columns selected. Please select text columns to enable chat functionality.")
     else:
