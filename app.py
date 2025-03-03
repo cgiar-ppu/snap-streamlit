@@ -1272,6 +1272,9 @@ Focus on key points, insights, or patterns that emerge from the text."""
                     if not openai_api_key:
                         st.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
                     else:
+                        # Set flag to indicate summarization button was clicked
+                        st.session_state['_summarization_button_clicked'] = True
+                        
                         llm = ChatOpenAI(
                             api_key=openai_api_key, 
                             model_name='gpt-4o',  # or 'gpt-4' if you have access
@@ -1371,6 +1374,10 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                         summary_df = pd.DataFrame(summaries)
                                         # Store the summaries DataFrame in session state
                                         st.session_state['summary_df'] = summary_df
+                                        # Store additional summary info in session state
+                                        st.session_state['has_references'] = enable_references
+                                        st.session_state['reference_id_column'] = reference_id_column
+                                        st.session_state['url_column'] = url_column if add_hyperlinks else None
                                         # Display
                                         if enable_references and 'Enhanced_Summary' in summary_df.columns:
                                             st.write("### Summaries per Cluster (with references):")
@@ -1395,6 +1402,37 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                         st.markdown(href, unsafe_allow_html=True)
     else:
         st.warning("No data available for summarization.")
+
+    # Display existing summaries if available (when returning to the tab)
+    if not st.session_state.get('_summarization_button_clicked', False):  # Only show if not just generated
+        if 'high_level_summary' in st.session_state:
+            st.write("### Existing High-Level Summary:")
+            if st.session_state.get('enhanced_summary'):
+                st.markdown(st.session_state['enhanced_summary'], unsafe_allow_html=True)
+                with st.expander("View original summary (without references)"):
+                    st.write(st.session_state['high_level_summary'])
+            else:
+                st.write(st.session_state['high_level_summary'])
+
+        if 'summary_df' in st.session_state and not st.session_state['summary_df'].empty:
+            st.write("### Existing Cluster Summaries:")
+            summary_df = st.session_state['summary_df']
+            if 'Enhanced_Summary' in summary_df.columns:
+                for idx, row in summary_df.iterrows():
+                    st.write(f"**Topic {row['Topic']}**")
+                    st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
+                    st.write("---")
+                with st.expander("View original summaries in table format"):
+                    st.dataframe(summary_df[['Topic', 'Summary']])
+            else:
+                st.dataframe(summary_df)
+
+            # Add download button for existing summaries
+            dl_df = summary_df[['Topic', 'Summary']] if 'Enhanced_Summary' in summary_df.columns else summary_df
+            csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
+            b64 = base64.b64encode(csv_bytes).decode()
+            href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
+            st.markdown(href, unsafe_allow_html=True)
 
 
 ###############################################################################
@@ -1482,42 +1520,46 @@ with tab_chat:
         if not (has_high_level or has_cluster_summaries):
             st.warning("No summaries available. Please generate summaries in the Summarization tab first.")
         else:
-            summary_type = st.radio(
-                "Choose summary type:",
-                ["High-Level Summary", "Cluster Summaries"] if has_high_level and has_cluster_summaries else 
-                ["High-Level Summary"] if has_high_level else 
-                ["Cluster Summaries"]
+            # Create a list of all available summaries
+            available_summaries = []
+            if has_high_level:
+                available_summaries.append("High-Level Summary")
+            if has_cluster_summaries:
+                available_summaries.extend([f"Cluster {t}" for t in st.session_state['summary_df']['Topic'].unique()])
+            
+            selected_summaries = st.multiselect(
+                "Select summaries to include:",
+                available_summaries,
+                default=available_summaries,
+                help="Choose which summaries to include in the chat context. You can select both the high-level summary and specific cluster summaries."
             )
             
-            if summary_type == "High-Level Summary" and has_high_level:
-                # Create a DataFrame with the high-level summary
-                df_chat = pd.DataFrame({
-                    'Summary_Type': ['High-Level Summary'],
-                    'Content': [st.session_state.get('enhanced_summary', st.session_state['high_level_summary'])]
-                })
-            elif summary_type == "Cluster Summaries" and has_cluster_summaries:
-                summary_df = st.session_state['summary_df']
-                if 'Enhanced_Summary' in summary_df.columns:
-                    # Allow selecting specific clusters
-                    available_topics = summary_df['Topic'].unique()
-                    selected_summary_topics = st.multiselect(
-                        "Select clusters to include:",
-                        available_topics,
-                        default=available_topics,
-                        format_func=lambda x: f"Cluster {x}"
-                    )
-                    
-                    if selected_summary_topics:
-                        df_chat = summary_df[summary_df['Topic'].isin(selected_summary_topics)].copy()
-                        # Rename columns for better context display
-                        df_chat['Content'] = df_chat['Enhanced_Summary']
-                        df_chat['Summary_Type'] = df_chat['Topic'].apply(lambda x: f"Cluster {x} Summary")
-                    else:
-                        st.warning("Please select at least one cluster to chat about.")
-                else:
-                    df_chat = summary_df.copy()
-                    df_chat['Content'] = df_chat['Summary']
-                    df_chat['Summary_Type'] = df_chat['Topic'].apply(lambda x: f"Cluster {x} Summary")
+            if selected_summaries:
+                # Create DataFrame with selected summaries
+                summary_rows = []
+                
+                # Add high-level summary if selected
+                if "High-Level Summary" in selected_summaries and has_high_level:
+                    summary_rows.append({
+                        'Summary_Type': 'High-Level Summary',
+                        'Content': st.session_state.get('enhanced_summary', st.session_state['high_level_summary'])
+                    })
+                
+                # Add selected cluster summaries
+                if has_cluster_summaries:
+                    summary_df = st.session_state['summary_df']
+                    for cluster_name in selected_summaries:
+                        if cluster_name.startswith("Cluster "):
+                            topic_num = int(cluster_name.split(" ")[1])
+                            cluster_row = summary_df[summary_df['Topic'] == topic_num].iloc[0]
+                            summary_rows.append({
+                                'Summary_Type': f"Cluster {topic_num} Summary",
+                                'Content': cluster_row['Enhanced_Summary'] if 'Enhanced_Summary' in cluster_row else cluster_row['Summary']
+                            })
+                
+                df_chat = pd.DataFrame(summary_rows)
+            else:
+                st.warning("Please select at least one summary to chat about.")
 
     if df_chat is not None and not df_chat.empty:
         # If we have clustered data, allow cluster selection
