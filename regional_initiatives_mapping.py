@@ -67,31 +67,31 @@ def main():
     print("Reading input file...")
     data_df = pd.read_excel(input_file)
     
-    # Add Regional Integrated Initiatives column based on Submitter
-    print("Adding Regional Integrated Initiatives column...")
-    data_df['Regional Integrated Initiatives'] = data_df['Submitter'].apply(
+    # Add Action Area column based on Submitter
+    print("Adding Action Area column...")
+    data_df['Action Area'] = data_df['Submitter'].apply(
         lambda x: get_regional_initiative(x, initiative_to_ri)
     )
     
     # Save back to the original file
-    print(f"Saving Regional Integrated Initiatives column back to {input_file}...")
+    print(f"Saving Action Area column back to {input_file}...")
     data_df.to_excel(input_file, index=False)
     print("Done!")
     
     # Print statistics
     total_rows = len(data_df)
-    mapped_rows = data_df['Regional Integrated Initiatives'].notna().sum()
+    mapped_rows = data_df['Action Area'].notna().sum()
     print(f"\nMapping Statistics:")
     print(f"Total rows: {total_rows}")
     print(f"Successfully mapped rows: {mapped_rows}")
     print(f"Mapping success rate: {(mapped_rows/total_rows)*100:.2f}%")
     
-    # Print Regional Integrated Initiatives distribution
-    print("\nRegional Integrated Initiatives Distribution:")
-    print(data_df['Regional Integrated Initiatives'].value_counts(dropna=False))
+    # Print Action Area distribution
+    print("\nAction Area Distribution:")
+    print(data_df['Action Area'].value_counts(dropna=False))
     
     # Print sample of unmapped submitters to help debugging
-    unmapped = data_df[data_df['Regional Integrated Initiatives'].isna()]['Submitter'].unique()
+    unmapped = data_df[data_df['Action Area'].isna()]['Submitter'].unique()
     print("\nSample of unmapped submitters (first 10):")
     print(sorted(unmapped)[:10])
 
