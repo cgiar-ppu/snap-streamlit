@@ -238,7 +238,7 @@ def load_or_compute_embeddings(df, using_default_dataset, uploaded_file_name=Non
     if not text_columns:
         return None, None
 
-    base_name = "PRMS_2022_2023_QAed" if using_default_dataset else "custom_dataset"
+    base_name = "PRMS_2022_2023_2024_Batch1_QAed" if using_default_dataset else "custom_dataset"
     if uploaded_file_name:
         base_name = os.path.splitext(uploaded_file_name)[0]
 
@@ -297,14 +297,14 @@ def reset_filters():
 # Sidebar: Dataset Selection
 ###############################################################################
 st.sidebar.title("Data Selection")
-dataset_option = st.sidebar.selectbox('Select Dataset', ('PRMS 2022+2023 QAed', 'Upload my dataset'))
+dataset_option = st.sidebar.selectbox('Select Dataset', ('PRMS 2022+2023+2024 (Batch 1) QAed', 'Upload my dataset'))
 
 if 'df' not in st.session_state:
     st.session_state['df'] = pd.DataFrame()
 if 'filtered_df' not in st.session_state:
     st.session_state['filtered_df'] = pd.DataFrame()
 
-if dataset_option == 'PRMS 2022+2023 QAed':
+if dataset_option == 'PRMS 2022+2023+2024 (Batch 1) QAed':
     default_dataset_path = os.path.join(BASE_DIR, 'input', 'export_data_table_results_20250303_042559CET.xlsx')
     df = load_default_dataset(default_dataset_path)
     if df is not None:
@@ -515,7 +515,7 @@ with tab_help:
     ### Troubleshooting
     - If you see no results, try lowering the similarity threshold or removing negative/required keywords.
     - Ensure you have at least one text column selected for embeddings.
-    - Check “Internal Validation” for debugging details.
+    - Check "Internal Validation" for debugging details.
     """)
 
 ###############################################################################
