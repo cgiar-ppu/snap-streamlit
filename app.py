@@ -1369,6 +1369,8 @@ Focus on key points, insights, or patterns that emerge from the text."""
 
                                     if summaries:
                                         summary_df = pd.DataFrame(summaries)
+                                        # Store the summaries DataFrame in session state
+                                        st.session_state['summary_df'] = summary_df
                                         # Display
                                         if enable_references and 'Enhanced_Summary' in summary_df.columns:
                                             st.write("### Summaries per Cluster (with references):")
