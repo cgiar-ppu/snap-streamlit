@@ -887,21 +887,13 @@ with tab_clustering:
                             fig2 = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_for_clustering)
                             st.plotly_chart(fig2)
 
-                            st.write("### Topic Hierarchy")
-                            fig3 = topic_model.visualize_hierarchy()
-                            st.plotly_chart(fig3)
-
-                            st.write("Computing Hierarchical Topics...")
+                            #st.write("Computing Hierarchical Topics...")
                             hierarchy = topic_model.hierarchical_topics(texts_cleaned)
                             st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
 
-                            st.subheader("Hierarchical Topic Treemap")
-                            if hierarchy is not None and not hierarchy.empty:
-                                # For simplicity, we can just show the official plot
-                                fig_treemap = topic_model.visualize_hierarchy()
-                                st.plotly_chart(fig_treemap)
-                            else:
-                                st.warning("No hierarchical topic information available.")
+                            st.write("### Topic Hierarchy")
+                            fig3 = topic_model.visualize_hierarchy()
+                            st.plotly_chart(fig3)
 
                         except Exception as e:
                             st.error(f"An error occurred during clustering: {e}")
