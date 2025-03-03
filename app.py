@@ -34,10 +34,36 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
-# For summarization
+# For summarization and chat
 from langchain.chains import LLMChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from openai import OpenAI
+from transformers import GPT2TokenizerFast
+
+# Initialize OpenAI client and tokenizer
+client = OpenAI()
+tokenizer = GPT2TokenizerFast.from_pretrained("Xenova/gpt-4o")
+MAX_CONTEXT_WINDOW = 128000  # GPT-4o context window size
+
+# Initialize chat history in session state if not exists
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
+###############################################################################
+# Helper: Get chat response from OpenAI
+###############################################################################
+def get_chat_response(messages):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"Error querying OpenAI: {e}")
+        return None
 
 ###############################################################################
 # Helper: Attempt to get this file's directory or fallback to current working dir
@@ -583,10 +609,10 @@ else:
 if 'active_tab_index' not in st.session_state:
     st.session_state.active_tab_index = 0
 
-tabs_titles = ["Semantic Search", "Clustering", "Summarization", "Help", "Internal Validation"]
+tabs_titles = ["Semantic Search", "Clustering", "Summarization", "Chat", "Help", "Internal Validation"]
 tabs = st.tabs(tabs_titles)
 # We just create these references so we can navigate more easily
-tab_semantic, tab_clustering, tab_summarization, tab_help, tab_internal = tabs
+tab_semantic, tab_clustering, tab_summarization, tab_chat, tab_help, tab_internal = tabs
 
 ###############################################################################
 # Tab: Help
@@ -1363,6 +1389,210 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                         st.markdown(href, unsafe_allow_html=True)
     else:
         st.warning("No data available for summarization.")
+
+
+###############################################################################
+# Tab: Chat
+###############################################################################
+with tab_chat:
+    st.header("Chat with Your Data")
+    
+    # Add explanation about chat functionality
+    with st.expander("ℹ️ How Chat Works", expanded=False):
+        st.markdown("""
+        ### Understanding Chat with Your Data
+
+        The chat functionality allows you to have an interactive conversation about your data, whether it's filtered, clustered, or raw. Here's how it works:
+
+        1. **Data Selection**:
+           - Choose which dataset to chat about (filtered, clustered, or search results)
+           - Optionally focus on specific clusters if clustering was performed
+           - System automatically includes relevant context from your selection
+
+        2. **Context Window**:
+           - Shows how much of the GPT-4 context window is being used
+           - Helps you understand if you need to filter data further
+           - Displays token usage statistics
+
+        3. **Chat Features**:
+           - Ask questions about your data
+           - Get insights and analysis
+           - Reference specific documents or clusters
+           - Download chat context for transparency
+
+        ### Best Practices
+
+        1. **Data Selection**:
+           - Start with filtered or clustered data for more focused conversations
+           - Select specific clusters if you want to dive deep into a topic
+           - Consider the context window usage when selecting data
+
+        2. **Asking Questions**:
+           - Be specific in your questions
+           - Ask about patterns, trends, or insights
+           - Reference clusters or documents by their IDs
+           - Build on previous questions for deeper analysis
+
+        3. **Managing Context**:
+           - Monitor the context window usage
+           - Filter data further if context is too full
+           - Download chat context for documentation
+           - Clear chat history to start fresh
+
+        ### Tips for Better Results
+
+        - **Question Types**:
+          - "What are the main themes in cluster 3?"
+          - "Compare the findings between clusters 1 and 2"
+          - "Summarize the methodology used across these documents"
+          - "What are the common outcomes reported?"
+
+        - **Follow-up Questions**:
+          - Build on previous answers
+          - Ask for clarification
+          - Request specific examples
+          - Explore relationships between findings
+        """)
+
+    # Data selection for chat
+    data_source = st.radio(
+        "Select data to chat about:",
+        ["Filtered Dataset", "Clustered Data", "Search Results"],
+        help="Choose which dataset you want to analyze in the chat."
+    )
+
+    df_chat = None
+    if data_source == "Filtered Dataset" and 'filtered_df' in st.session_state and not st.session_state['filtered_df'].empty:
+        df_chat = st.session_state['filtered_df']
+    elif data_source == "Clustered Data" and 'clustered_data' in st.session_state and not st.session_state['clustered_data'].empty:
+        df_chat = st.session_state['clustered_data']
+    elif data_source == "Search Results" and 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+        df_chat = st.session_state['search_results']
+
+    if df_chat is not None and not df_chat.empty:
+        # If we have clustered data, allow cluster selection
+        selected_cluster = None
+        if 'Topic' in df_chat.columns:
+            cluster_option = st.radio(
+                "Choose cluster scope:",
+                ["All Clusters", "Specific Cluster"]
+            )
+            if cluster_option == "Specific Cluster":
+                unique_topics = sorted(df_chat['Topic'].unique())
+                selected_cluster = st.selectbox(
+                    "Select cluster to focus on:",
+                    unique_topics,
+                    format_func=lambda x: f"Cluster {x}"
+                )
+                if selected_cluster is not None:
+                    df_chat = df_chat[df_chat['Topic'] == selected_cluster]
+
+        # Prepare the data for chat context
+        text_columns = st.session_state.get('text_columns', [])
+        if text_columns:
+            # Limit to 210 documents like in the example
+            if len(df_chat) > 210:
+                st.info("ℹ️ For optimal performance, the chat will only analyze the first 210 results.")
+                df_chat = df_chat.head(210)
+
+            # Prepare system message
+            system_msg = {
+                "role": "system",
+                "content": """You are a specialized assistant analyzing data from a research database. 
+Your role is to:
+1. Provide clear, concise answers based on the data provided
+2. Highlight relevant information from specific results when answering
+3. When referencing specific results, use their row index or ID if available
+4. Clearly state if information is not available in the results
+5. Maintain a professional and analytical tone
+
+The data is provided in a structured format where:
+- Each result contains multiple fields
+- Text content is primarily in the following columns: """ + ", ".join(text_columns) + """
+- Additional metadata and fields are available for reference
+- If clusters are present, they are numbered (e.g., Cluster 0, Cluster 1, etc.)"""
+            }
+
+            # Prepare the data context
+            data_text = "Available Data:\n"
+            for idx, row in df_chat.iterrows():
+                data_text += f"\nItem {idx}:\n"
+                for col in df_chat.columns:
+                    if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
+                        data_text += f"{col}: {row[col]}\n"
+
+            # Calculate token usage
+            system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
+            data_tokens = len(tokenizer(data_text)["input_ids"])
+            total_tokens = system_tokens + data_tokens
+            context_usage_percent = (total_tokens / MAX_CONTEXT_WINDOW) * 100
+
+            # Display token usage
+            st.subheader("Context Window Usage")
+            st.write(f"System Message: {system_tokens:,} tokens")
+            st.write(f"Data Context: {data_tokens:,} tokens")
+            st.write(f"Total: {total_tokens:,} tokens ({context_usage_percent:.1f}% of available context)")
+            
+            if context_usage_percent > 90:
+                st.warning("⚠️ High context usage! Consider reducing the number of results or filtering further.")
+            elif context_usage_percent > 75:
+                st.info("ℹ️ Moderate context usage. Still room for your question, but consider reducing results if asking a long question.")
+
+            # Add download button for chat context
+            chat_context = f"""System Message:
+{system_msg['content']}
+
+{data_text}"""
+            st.download_button(
+                label="📥 Download Chat Context",
+                data=chat_context,
+                file_name="chat_context.txt",
+                mime="text/plain",
+                help="Download the exact context that the chatbot receives"
+            )
+
+            # Chat interface
+            col_chat1, col_chat2 = st.columns([3, 1])
+            with col_chat1:
+                user_input = st.text_area("Ask a question about your data:", key="chat_input")
+            with col_chat2:
+                if st.button("Clear Chat History"):
+                    st.session_state.chat_history = []
+                    st.rerun()
+
+            # Store current tab index before processing
+            current_tab = tabs_titles.index("Chat")
+            
+            if st.button("Send", key="send_button"):
+                if user_input:
+                    # Set the active tab index to stay on Chat
+                    st.session_state.active_tab_index = current_tab
+                    
+                    with st.spinner("Processing your question..."):
+                        # Add user's question to chat history
+                        st.session_state.chat_history.append({"role": "user", "content": user_input})
+                        
+                        # Prepare messages for API call
+                        messages = [system_msg]
+                        messages.append({"role": "user", "content": f"Here is the data to reference:\n\n{data_text}\n\nUser question: {user_input}"})
+                        
+                        # Get response from OpenAI
+                        response = get_chat_response(messages)
+                        
+                        if response:
+                            st.session_state.chat_history.append({"role": "assistant", "content": response})
+
+            # Display chat history
+            st.subheader("Chat History")
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    st.write("You:", message["content"])
+                else:
+                    st.write("Assistant:", message["content"])
+        else:
+            st.warning("No text columns selected. Please select text columns to enable chat functionality.")
+    else:
+        st.warning("No data available for chat. Please filter, cluster, or search first.")
 
 
 ###############################################################################
