@@ -1054,8 +1054,49 @@ with tab_summarization:
                 else:
                     selected_topics = topics
 
-                temperature = st.slider("Summarization Temperature", 0.0, 1.0, 0.7)
-                max_tokens = st.slider("Max Tokens for Summarization", 100, 3000, 1000)
+                # Add system prompt configuration
+                default_system_prompt = """You are an expert summarizer skilled in creating concise and relevant summaries.
+You will be given text and an objective context. Please produce a clear, cohesive,
+and thematically relevant summary. 
+Focus on key points, insights, or patterns that emerge from the text."""
+
+                if 'system_prompt' not in st.session_state:
+                    st.session_state['system_prompt'] = default_system_prompt
+
+                with st.expander("🔧 Advanced Settings", expanded=False):
+                    st.markdown("""
+                    ### System Prompt Configuration
+                    
+                    The system prompt guides the AI in how to generate summaries. You can customize it to better suit your needs:
+                    - Be specific about the style and focus you want
+                    - Add domain-specific context if needed
+                    - Include any special formatting requirements
+                    """)
+                    
+                    system_prompt = st.text_area(
+                        "Customize System Prompt",
+                        value=st.session_state['system_prompt'],
+                        height=150,
+                        help="This prompt guides the AI in how to generate summaries. Edit it to customize the summary style and focus."
+                    )
+                    
+                    if st.button("Reset to Default"):
+                        system_prompt = default_system_prompt
+                        st.session_state['system_prompt'] = default_system_prompt
+
+                    st.markdown("### Generation Parameters")
+                    temperature = st.slider(
+                        "Temperature",
+                        0.0, 1.0, 0.7,
+                        help="Higher values (0.7-1.0) make summaries more creative but less predictable. Lower values (0.1-0.3) make them more focused and consistent."
+                    )
+                    max_tokens = st.slider(
+                        "Max Tokens",
+                        100, 3000, 1000,
+                        help="Maximum length of generated summaries. Higher values allow for more detailed summaries but take longer to generate."
+                    )
+
+                st.session_state['system_prompt'] = system_prompt
 
                 st.write("### Enhanced Summary References")
                 st.write("Select columns for references (optional).")
@@ -1104,12 +1145,6 @@ with tab_summarization:
                             temperature=temperature, 
                             max_tokens=max_tokens
                         )
-                        system_prompt = """
-                            You are an expert summarizer skilled in creating concise and relevant summaries.
-                            You will be given text and an objective context. Please produce a clear, cohesive,
-                            and thematically relevant summary. 
-                            Focus on key points, insights, or patterns that emerge from the text.
-                        """
 
                         # Filter to selected topics
                         if selected_topics:
@@ -1128,13 +1163,18 @@ with tab_summarization:
                             else:
                                 # Generate High-Level Summary
                                 user_prompt = f"**Text to summarize**: {combined_text}"
-                                system_message = SystemMessagePromptTemplate.from_template(system_prompt)
+                                system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
                                 human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
                                 chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
 
                                 with st.spinner("Generating high-level summary..."):
                                     chain = LLMChain(llm=llm, prompt=chat_prompt)
                                     high_level_summary = chain.run(user_prompt=user_prompt).strip()
+
+                                # For cluster-specific summaries, use the same customized prompt
+                                local_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
+                                local_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                                local_chat_prompt = ChatPromptTemplate.from_messages([local_system_message, local_human_message])
 
                                 # Possibly add references to high-level summary
                                 if enable_references and reference_id_column:
@@ -1166,10 +1206,6 @@ with tab_summarization:
                                         if not cluster_text.strip():
                                             continue
                                         user_prompt_local = f"**Text to summarize**: {cluster_text}"
-                                        local_system_message = SystemMessagePromptTemplate.from_template(system_prompt)
-                                        local_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                                        local_chat_prompt = ChatPromptTemplate.from_messages([local_system_message, local_human_message])
-
                                         with st.spinner(f"Summarizing cluster {topic_val}..."):
                                             local_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
                                             summary_local = local_chain.run(user_prompt=user_prompt_local).strip()
