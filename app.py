@@ -1211,13 +1211,14 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                             summary_local = local_chain.run(user_prompt=user_prompt_local).strip()
 
                                         if enable_references and reference_id_column:
-                                            summary_with_refs = add_references_to_summary(
-                                                summary_local,
-                                                cluster_df,
-                                                reference_id_column,
-                                                url_column if add_hyperlinks else None,
-                                                llm
-                                            )
+                                            with st.spinner(f"Adding references to cluster {topic_val} summary..."):
+                                                summary_with_refs = add_references_to_summary(
+                                                    summary_local,
+                                                    cluster_df,
+                                                    reference_id_column,
+                                                    url_column if add_hyperlinks else None,
+                                                    llm
+                                                )
                                             summaries.append({
                                                 'Topic': topic_val,
                                                 'Summary': summary_local,
