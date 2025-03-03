@@ -540,9 +540,53 @@ with tab_semantic:
             if embeddings is not None:
                 with st.expander("ℹ️ How Semantic Search Works", expanded=False):
                     st.markdown("""
-                        **Semantic Search** uses embeddings to find similar documents based on your query vector. 
-                        You can also filter by required and excluded keywords. 
-                        The threshold determines how close a document's vector must be to the query vector.
+                    ### Understanding Semantic Search
+
+                    Unlike traditional keyword search that looks for exact matches, semantic search understands the meaning and context of your query. Here's how it works:
+
+                    1. **Query Processing**:
+                        - Your search query is converted into a numerical representation (embedding) that captures its meaning
+                        - Example: Searching for "Climate Smart Villages" will understand the concept, not just the words
+                        - Related terms like "sustainable communities", "resilient farming", or "agricultural adaptation" might be found even if they don't contain the exact words
+
+                    2. **Similarity Matching**:
+                        - Documents are ranked by how closely their meaning matches your query
+                        - The similarity threshold controls how strict this matching is
+                        - Higher threshold (e.g., 0.8) = more precise but fewer results
+                        - Lower threshold (e.g., 0.3) = more results but might be less relevant
+
+                    3. **Advanced Features**:
+                        - **Negative Keywords**: Use to explicitly exclude documents containing certain terms
+                        - **Required Keywords**: Ensure specific terms appear in the results
+                        - These work as traditional keyword filters after the semantic search
+
+                    ### Search Tips
+
+                    - **Phrase Queries**: Enter complete phrases for better context
+                        - "Climate Smart Villages" (as one concept)
+                        - Better than separate terms: "climate", "smart", "villages"
+
+                    - **Descriptive Queries**: Add context for better results
+                        - Instead of: "water"
+                        - Better: "water management in agriculture"
+
+                    - **Conceptual Queries**: Focus on concepts rather than specific terms
+                        - Instead of: "increased yield"
+                        - Better: "agricultural productivity improvements"
+
+                    ### Example Searches
+
+                    1. **Query**: "Climate Smart Villages"
+                        - Will find: Documents about climate-resilient communities, adaptive farming practices, sustainable village development
+                        - Even if they don't use these exact words
+
+                    2. **Query**: "Gender equality in agriculture"
+                        - Will find: Women's empowerment in farming, female farmer initiatives, gender-inclusive rural development
+                        - Related concepts are captured semantically
+
+                    3. **Query**: "Sustainable water management"
+                        + Required keyword: "irrigation"
+                        - Combines semantic understanding of water sustainability with specific irrigation focus
                     """)
 
                 with st.form("search_parameters"):
@@ -651,6 +695,77 @@ with tab_semantic:
 with tab_clustering:
     st.header("Clustering")
     if 'filtered_df' in st.session_state and not st.session_state['filtered_df'].empty:
+        # Add explanation about clustering
+        with st.expander("ℹ️ How Clustering Works", expanded=False):
+            st.markdown("""
+            ### Understanding Document Clustering
+
+            Clustering automatically groups similar documents together, helping you discover patterns and themes in your data. Here's how it works:
+
+            1. **Cluster Formation**:
+               - Documents are grouped based on their semantic similarity
+               - Each cluster represents a distinct theme or topic
+               - Documents that are too different from others may remain unclustered (labeled as -1)
+               - The "Min Cluster Size" parameter controls how clusters are formed
+
+            2. **Interpreting Results**:
+               - Each cluster is assigned a number (e.g., 0, 1, 2...)
+               - Cluster -1 contains "outlier" documents that didn't fit well in other clusters
+               - The size of each cluster indicates how common that theme is
+               - Keywords for each cluster show the main topics/concepts
+
+            3. **Visualizations**:
+               - **Intertopic Distance Map**: Shows how clusters relate to each other
+                 - Closer clusters are more semantically similar
+                 - Size of circles indicates number of documents
+                 - Hover to see top terms for each cluster
+               
+               - **Topic Document Visualization**: Shows individual documents
+                 - Each point is a document
+                 - Colors indicate cluster membership
+                 - Distance between points shows similarity
+               
+               - **Topic Hierarchy**: Shows how topics are related
+                 - Tree structure shows topic relationships
+                 - Parent topics contain broader themes
+                 - Child topics show more specific sub-themes
+
+            ### How to Use Clusters
+
+            1. **Exploration**:
+               - Use clusters to discover main themes in your data
+               - Look for unexpected groupings that might reveal insights
+               - Identify outliers that might need special attention
+
+            2. **Analysis**:
+               - Compare cluster sizes to understand theme distribution
+               - Examine keywords to understand what defines each cluster
+               - Use hierarchy to see how themes are nested
+
+            3. **Practical Applications**:
+               - Generate summaries for specific clusters
+               - Focus detailed analysis on clusters of interest
+               - Use clusters to organize and categorize documents
+               - Identify gaps or overlaps in your dataset
+
+            ### Tips for Better Results
+
+            - **Adjust Min Cluster Size**:
+              - Larger values (15-20): Fewer, broader clusters
+              - Smaller values (2-5): More specific, smaller clusters
+              - Balance between too many small clusters and too few large ones
+
+            - **Choose Data Wisely**:
+              - Cluster full dataset for overall themes
+              - Cluster search results for focused analysis
+              - More documents generally give better clusters
+
+            - **Interpret with Context**:
+              - Consider your domain knowledge
+              - Look for patterns across multiple visualizations
+              - Use cluster insights to guide further analysis
+            """)
+
         df_to_cluster = None
         # UI to pick what data to cluster
         clustering_option = st.radio(
@@ -802,6 +917,95 @@ with tab_clustering:
 ###############################################################################
 with tab_summarization:
     st.header("Summarization")
+    # Add explanation about summarization
+    with st.expander("ℹ️ How Summarization Works", expanded=False):
+        st.markdown("""
+        ### Understanding Document Summarization
+
+        Summarization condenses multiple documents into concise, meaningful summaries while preserving key information. Here's how it works:
+
+        1. **Summary Generation**:
+           - Documents are processed using advanced language models
+           - Key themes and important points are identified
+           - Content is condensed while maintaining context
+           - Both high-level and cluster-specific summaries are available
+
+        2. **Reference System**:
+           - Summaries can include references to source documents
+           - References are shown as [ID] or as clickable links
+           - Each statement can be traced back to its source
+           - Helps maintain accountability and verification
+
+        3. **Types of Summaries**:
+           - **High-Level Summary**: Overview of all selected documents
+             - Captures main themes across the entire selection
+             - Ideal for quick understanding of large document sets
+             - Shows relationships between different topics
+           
+           - **Cluster-Specific Summaries**: Focused on each cluster
+             - More detailed for specific themes
+             - Shows unique aspects of each cluster
+             - Helps understand sub-topics in depth
+
+        ### How to Use Summaries
+
+        1. **Configuration**:
+           - Choose between all clusters or specific ones
+           - Set temperature for creativity vs. consistency
+           - Adjust max tokens for summary length
+           - Enable/disable reference system
+
+        2. **Reference Options**:
+           - Select column for reference IDs
+           - Add hyperlinks to references
+           - Choose URL column for clickable links
+           - References help track information sources
+
+        3. **Practical Applications**:
+           - Quick overview of large datasets
+           - Detailed analysis of specific themes
+           - Evidence-based reporting with references
+           - Compare different document groups
+
+        ### Tips for Better Results
+
+        - **Temperature Setting**:
+          - Higher (0.7-1.0): More creative, varied summaries
+          - Lower (0.1-0.3): More consistent, conservative summaries
+          - Balance based on your needs for creativity vs. consistency
+
+        - **Token Length**:
+          - Longer limits: More detailed summaries
+          - Shorter limits: More concise, focused summaries
+          - Adjust based on document complexity
+
+        - **Reference Usage**:
+          - Enable references for traceability
+          - Use hyperlinks for easy navigation
+          - Choose meaningful reference columns
+          - Helps validate summary accuracy
+
+        ### Best Practices
+
+        1. **For General Overview**:
+           - Use high-level summary
+           - Keep temperature moderate (0.5-0.7)
+           - Enable references for verification
+           - Focus on broader themes
+
+        2. **For Detailed Analysis**:
+           - Use cluster-specific summaries
+           - Adjust temperature based on need
+           - Include references with hyperlinks
+           - Look for patterns within clusters
+
+        3. **For Reporting**:
+           - Combine both summary types
+           - Use references extensively
+           - Balance detail and brevity
+           - Ensure source traceability
+        """)
+
     df_summ = None
     # We'll try to summarize either the clustered data or just the filtered dataset
     if 'clustered_data' in st.session_state and not st.session_state['clustered_data'].empty:
