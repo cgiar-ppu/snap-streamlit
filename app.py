@@ -950,58 +950,69 @@ with tab_clustering:
                             )
                             dfc['Topic'] = topics
 
+                            # Store all results in session state
                             st.session_state['topic_model'] = topic_model
                             st.session_state['clustered_data'] = dfc.copy()
+                            st.session_state['clustering_texts_cleaned'] = texts_cleaned
+                            st.session_state['clustering_embeddings'] = embeddings_for_clustering
+                            st.session_state['clustering_completed'] = True
 
-                            st.subheader("Topic Overview")
-                            unique_topics = sorted(list(set(topics)))
-                            cluster_info = []
-                            for t in unique_topics:
-                                cluster_docs = dfc[dfc['Topic'] == t]
-                                count = len(cluster_docs)
-                                top_words = topic_model.get_topic(t)
-                                if top_words:
-                                    top_keywords = ", ".join([w[0] for w in top_words[:5]])
-                                else:
-                                    top_keywords = "N/A"
-                                cluster_info.append((t, count, top_keywords))
-                            cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
-                            st.dataframe(
-                                cluster_df,
-                                column_config={
-                                    "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
-                                    "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
-                                    "Top Keywords": st.column_config.TextColumn(
-                                        "Top Keywords",
-                                        help="Top 5 keywords that characterize this topic"
-                                    )
-                                }
-                            )
-
-                            st.subheader("Clustering Results")
-                            columns_to_display = [c for c in dfc.columns if c != 'text']
-                            st.write(dfc[columns_to_display])
-
-                            # Visualizations
-                            st.write("### Intertopic Distance Map")
-                            fig1 = topic_model.visualize_topics()
-                            st.plotly_chart(fig1)
-
-                            st.write("### Topic Document Visualization")
-                            fig2 = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_for_clustering)
-                            st.plotly_chart(fig2)
-
-                            #st.write("Computing Hierarchical Topics...")
+                            # Compute and store visualizations
+                            st.session_state['intertopic_distance_fig'] = topic_model.visualize_topics()
+                            st.session_state['topic_document_fig'] = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_for_clustering)
                             hierarchy = topic_model.hierarchical_topics(texts_cleaned)
                             st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
-
-                            st.write("### Topic Hierarchy")
-                            fig3 = topic_model.visualize_hierarchy()
-                            st.plotly_chart(fig3)
+                            st.session_state['hierarchy_fig'] = topic_model.visualize_hierarchy()
 
                         except Exception as e:
                             st.error(f"An error occurred during clustering: {e}")
                             st.session_state['clustering_error'] = str(e)
+                            st.session_state['clustering_completed'] = False
+
+                # Display clustering results if they exist
+                if st.session_state.get('clustering_completed', False):
+                    st.subheader("Topic Overview")
+                    dfc = st.session_state['clustered_data']
+                    topic_model = st.session_state['topic_model']
+                    topics = dfc['Topic'].tolist()
+                    
+                    unique_topics = sorted(list(set(topics)))
+                    cluster_info = []
+                    for t in unique_topics:
+                        cluster_docs = dfc[dfc['Topic'] == t]
+                        count = len(cluster_docs)
+                        top_words = topic_model.get_topic(t)
+                        if top_words:
+                            top_keywords = ", ".join([w[0] for w in top_words[:5]])
+                        else:
+                            top_keywords = "N/A"
+                        cluster_info.append((t, count, top_keywords))
+                    cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+                    st.dataframe(
+                        cluster_df,
+                        column_config={
+                            "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                            "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                            "Top Keywords": st.column_config.TextColumn(
+                                "Top Keywords",
+                                help="Top 5 keywords that characterize this topic"
+                            )
+                        }
+                    )
+
+                    st.subheader("Clustering Results")
+                    columns_to_display = [c for c in dfc.columns if c != 'text']
+                    st.write(dfc[columns_to_display])
+
+                    # Display stored visualizations
+                    st.write("### Intertopic Distance Map")
+                    st.plotly_chart(st.session_state['intertopic_distance_fig'])
+
+                    st.write("### Topic Document Visualization")
+                    st.plotly_chart(st.session_state['topic_document_fig'])
+
+                    st.write("### Topic Hierarchy")
+                    st.plotly_chart(st.session_state['hierarchy_fig'])
             else:
                 st.warning("No data available for clustering or embeddings not ready.")
     else:
