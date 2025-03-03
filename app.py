@@ -390,6 +390,43 @@ if dataset_option == 'PRMS 2022+2023+2024 (Batch 1) QAed':
         # Show dynamic filters form if any selected columns
         if st.session_state['additional_filters_selected']:
             st.subheader("Apply Filters")
+            
+            # Quick search section (outside form)
+            for col_name in st.session_state['additional_filters_selected']:
+                unique_vals = sorted(df[col_name].dropna().unique().tolist())
+                
+                # Add a search box for quick selection
+                search_key = f"search_{col_name}"
+                if search_key not in st.session_state:
+                    st.session_state[search_key] = ""
+                    
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    search_term = st.text_input(
+                        f"Search in {col_name}",
+                        key=search_key,
+                        help="Enter text to find and select all matching values"
+                    )
+                with col2:
+                    if st.button(f"Select Matching", key=f"select_{col_name}"):
+                        # Handle comma-separated values
+                        if search_term:
+                            matching_vals = [
+                                val for val in unique_vals
+                                if any(search_term.lower() in str(part).lower() 
+                                    for part in (val.split(',') if isinstance(val, str) else [val]))
+                            ]
+                            # Update the multiselect default value
+                            current_selected = st.session_state['filter_values'].get(col_name, [])
+                            st.session_state['filter_values'][col_name] = list(set(current_selected + matching_vals))
+                            
+                            # Show feedback about matches
+                            if matching_vals:
+                                st.success(f"Found and selected {len(matching_vals)} matching values")
+                            else:
+                                st.warning("No matching values found")
+
+            # Filter application form
             with st.form("apply_filters_form"):
                 for col_name in st.session_state['additional_filters_selected']:
                     unique_vals = sorted(df[col_name].dropna().unique().tolist())
@@ -400,7 +437,16 @@ if dataset_option == 'PRMS 2022+2023+2024 (Batch 1) QAed':
                     )
                     st.session_state['filter_values'][col_name] = selected_vals
 
-                apply_filters_submitted = st.form_submit_button("Apply Filters to Dataset")
+                # Add clear filters button and apply filters button
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    clear_filters = st.form_submit_button("Clear All")
+                with col2:
+                    apply_filters_submitted = st.form_submit_button("Apply Filters to Dataset")
+
+                if clear_filters:
+                    st.session_state['filter_values'] = {}
+                    st.rerun()
 
         # Text columns selection
         st.subheader("**Select Text Columns for Embedding**")
