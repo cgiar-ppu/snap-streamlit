@@ -1303,6 +1303,8 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                 with st.spinner("Generating high-level summary..."):
                                     chain = LLMChain(llm=llm, prompt=chat_prompt)
                                     high_level_summary = chain.run(user_prompt=user_prompt).strip()
+                                    # Store the high-level summary in session state
+                                    st.session_state['high_level_summary'] = high_level_summary
 
                                 # For cluster-specific summaries, use the same customized prompt
                                 local_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
@@ -1319,6 +1321,8 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                             url_column if add_hyperlinks else None,
                                             llm
                                         )
+                                    # Store the enhanced summary in session state
+                                    st.session_state['enhanced_summary'] = enhanced_summary
                                     st.write("### High-Level Summary (with references):")
                                     st.markdown(enhanced_summary, unsafe_allow_html=True)
                                     with st.expander("View original summary (without references)"):
@@ -1457,7 +1461,7 @@ with tab_chat:
     # Data selection for chat
     data_source = st.radio(
         "Select data to chat about:",
-        ["Filtered Dataset", "Clustered Data", "Search Results"],
+        ["Filtered Dataset", "Clustered Data", "Search Results", "Summarized Data"],
         help="Choose which dataset you want to analyze in the chat."
     )
 
@@ -1468,11 +1472,55 @@ with tab_chat:
         df_chat = st.session_state['clustered_data']
     elif data_source == "Search Results" and 'search_results' in st.session_state and not st.session_state['search_results'].empty:
         df_chat = st.session_state['search_results']
+    elif data_source == "Summarized Data":
+        # Check if we have any summaries available
+        has_high_level = 'high_level_summary' in st.session_state
+        has_cluster_summaries = 'summary_df' in st.session_state and not st.session_state['summary_df'].empty
+        
+        if not (has_high_level or has_cluster_summaries):
+            st.warning("No summaries available. Please generate summaries in the Summarization tab first.")
+        else:
+            summary_type = st.radio(
+                "Choose summary type:",
+                ["High-Level Summary", "Cluster Summaries"] if has_high_level and has_cluster_summaries else 
+                ["High-Level Summary"] if has_high_level else 
+                ["Cluster Summaries"]
+            )
+            
+            if summary_type == "High-Level Summary" and has_high_level:
+                # Create a DataFrame with the high-level summary
+                df_chat = pd.DataFrame({
+                    'Summary_Type': ['High-Level Summary'],
+                    'Content': [st.session_state.get('enhanced_summary', st.session_state['high_level_summary'])]
+                })
+            elif summary_type == "Cluster Summaries" and has_cluster_summaries:
+                summary_df = st.session_state['summary_df']
+                if 'Enhanced_Summary' in summary_df.columns:
+                    # Allow selecting specific clusters
+                    available_topics = summary_df['Topic'].unique()
+                    selected_summary_topics = st.multiselect(
+                        "Select clusters to include:",
+                        available_topics,
+                        default=available_topics,
+                        format_func=lambda x: f"Cluster {x}"
+                    )
+                    
+                    if selected_summary_topics:
+                        df_chat = summary_df[summary_df['Topic'].isin(selected_summary_topics)].copy()
+                        # Rename columns for better context display
+                        df_chat['Content'] = df_chat['Enhanced_Summary']
+                        df_chat['Summary_Type'] = df_chat['Topic'].apply(lambda x: f"Cluster {x} Summary")
+                    else:
+                        st.warning("Please select at least one cluster to chat about.")
+                else:
+                    df_chat = summary_df.copy()
+                    df_chat['Content'] = df_chat['Summary']
+                    df_chat['Summary_Type'] = df_chat['Topic'].apply(lambda x: f"Cluster {x} Summary")
 
     if df_chat is not None and not df_chat.empty:
         # If we have clustered data, allow cluster selection
         selected_cluster = None
-        if 'Topic' in df_chat.columns:
+        if data_source != "Summarized Data" and 'Topic' in df_chat.columns:
             cluster_option = st.radio(
                 "Choose cluster scope:",
                 ["All Clusters", "Specific Cluster"]
@@ -1506,20 +1554,30 @@ Your role is to:
 4. Clearly state if information is not available in the results
 5. Maintain a professional and analytical tone
 
-The data is provided in a structured format where:
+The data is provided in a structured format where:""" + ("""
 - Each result contains multiple fields
 - Text content is primarily in the following columns: """ + ", ".join(text_columns) + """
 - Additional metadata and fields are available for reference
-- If clusters are present, they are numbered (e.g., Cluster 0, Cluster 1, etc.)"""
+- If clusters are present, they are numbered (e.g., Cluster 0, Cluster 1, etc.)""" if data_source != "Summarized Data" else """
+- The data consists of AI-generated summaries of the documents
+- Each summary may contain references to source documents in markdown format
+- References are shown as [ID] or as clickable hyperlinks
+- Summaries may be high-level (covering all documents) or cluster-specific""") + """
+"""
             }
 
             # Prepare the data context
             data_text = "Available Data:\n"
-            for idx, row in df_chat.iterrows():
-                data_text += f"\nItem {idx}:\n"
-                for col in df_chat.columns:
-                    if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
-                        data_text += f"{col}: {row[col]}\n"
+            if data_source == "Summarized Data":
+                for idx, row in df_chat.iterrows():
+                    data_text += f"\n{row['Summary_Type']}:\n"
+                    data_text += row['Content'] + "\n"
+            else:
+                for idx, row in df_chat.iterrows():
+                    data_text += f"\nItem {idx}:\n"
+                    for col in df_chat.columns:
+                        if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
+                            data_text += f"{col}: {row[col]}\n"
 
             # Calculate token usage
             system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
