@@ -905,7 +905,7 @@ with tab_clustering:
                     min_value=2,
                     max_value=50,
                     value=st.session_state['min_cluster_size'],
-                    help="Minimum size of each cluster in HDBSCAN.",
+                    help="Minimum size of each cluster in HDBSCAN; In other words, it's the minimum number of documents/texts that must be grouped together to form a valid cluster.\n\n- A larger value (e.g., 20) will result in fewer, larger clusters\n- A smaller value (e.g., 2-5) will allow for more clusters, including smaller ones\n- Documents that don't fit into any cluster meeting this minimum size requirement are labeled as noise (typically assigned to cluster -1)",
                     key="min_cluster_size"
                 )
 
@@ -966,7 +966,17 @@ with tab_clustering:
                                     top_keywords = "N/A"
                                 cluster_info.append((t, count, top_keywords))
                             cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
-                            st.dataframe(cluster_df)
+                            st.dataframe(
+                                cluster_df,
+                                column_config={
+                                    "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                                    "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                                    "Top Keywords": st.column_config.TextColumn(
+                                        "Top Keywords",
+                                        help="Top 5 keywords that characterize this topic"
+                                    )
+                                }
+                            )
 
                             st.subheader("Clustering Results")
                             columns_to_display = [c for c in dfc.columns if c != 'text']
