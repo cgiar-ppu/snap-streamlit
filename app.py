@@ -7,7 +7,9 @@ st.set_page_config(page_title="SNAP", layout="wide")
 
 # Add warning filters
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning, message='.*torch.classes.*')
+# More specific warning filter for torch.classes
+warnings.filterwarnings('ignore', message='.*torch.classes.*__path__._path.*')
+warnings.filterwarnings('ignore', message='.*torch.classes.*registered via torch::class_.*')
 
 import pandas as pd
 import numpy as np
@@ -84,24 +86,36 @@ BASE_DIR = get_base_dir()
 # NLTK Resource Initialization
 ###############################################################################
 def init_nltk_resources():
-    try:
-        nltk.data.find('corpora/stopwords')
-    except LookupError:
-        nltk.download('stopwords')
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        nltk.download('punkt_tab')
+    """Initialize NLTK resources with better error handling and less verbose output"""
+    nltk.data.path.append('/home/appuser/nltk_data')  # Ensure consistent data path
     
-    # Explicitly initialize the punkt tokenizer to catch any issues early
+    resources = {
+        'tokenizers/punkt': 'punkt_tab',  # Updated to use punkt_tab
+        'corpora/stopwords': 'stopwords'
+    }
+    
+    for resource_path, resource_name in resources.items():
+        try:
+            nltk.data.find(resource_path)
+        except LookupError:
+            try:
+                nltk.download(resource_name, quiet=True)
+            except Exception as e:
+                st.warning(f"Error downloading NLTK resource {resource_name}: {e}")
+    
+    # Test tokenizer silently
     try:
         from nltk.tokenize import PunktSentenceTokenizer
         tokenizer = PunktSentenceTokenizer()
-        tokenizer.tokenize("Test sentence.")  # Test the tokenizer
+        tokenizer.tokenize("Test sentence.")
     except Exception as e:
         st.error(f"Error initializing NLTK tokenizer: {e}")
-        nltk.download('punkt_tab', quiet=False)  # Try downloading again with verbose output
+        try:
+            nltk.download('punkt_tab', quiet=True)  # Updated to use punkt_tab
+        except Exception as e:
+            st.error(f"Failed to download punkt_tab tokenizer: {e}")
 
+# Initialize NLTK resources
 init_nltk_resources()
 
 ###############################################################################
