@@ -61,7 +61,7 @@ def main():
         'SGP-05': 'ST'     # Adaptation Insights
     }
     
-    input_file = 'input/export_data_table_results_20250403_092607CET.xlsx'
+    input_file = 'input/export_data_table_results_20251203_101413CET.xlsx'
     
     # Read the Excel file
     print("Reading input file...")
