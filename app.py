@@ -1172,11 +1172,16 @@ with tab_clustering:
             """)
 
         df_to_cluster = None
-        # UI to pick what data to cluster
-        clustering_option = st.radio(
-            "Select data for clustering:",
-            ('Full Dataset', 'Filtered Dataset', 'Semantic Search Results')
-        )
+        
+        # Create a form for data source selection
+        with st.form("clustering_source_form"):
+            clustering_option = st.radio(
+                "Select data for clustering:",
+                ('Full Dataset', 'Filtered Dataset', 'Semantic Search Results')
+            )
+            submit_source = st.form_submit_button("Apply Selection")
+            if submit_source:
+                st.session_state.active_tab_index = tabs_titles.index("Clustering")
 
         # Decide which DataFrame is used
         if clustering_option == 'Semantic Search Results':
@@ -1211,27 +1216,31 @@ with tab_clustering:
                 if 'min_cluster_size' not in st.session_state:
                     st.session_state['min_cluster_size'] = 5
 
-                min_cluster_size_val = st.slider(
-                    "Min Cluster Size",
-                    min_value=2,
-                    max_value=50,
-                    value=st.session_state['min_cluster_size'],
-                    help="Minimum size of each cluster in HDBSCAN; In other words, it's the minimum number of documents/texts that must be grouped together to form a valid cluster.\n\n- A larger value (e.g., 20) will result in fewer, larger clusters\n- A smaller value (e.g., 2-5) will allow for more clusters, including smaller ones\n- Documents that don't fit into any cluster meeting this minimum size requirement are labeled as noise (typically assigned to cluster -1)",
-                    key="min_cluster_size"
-                )
+                with st.form("clustering_params_form"):
+                    st.subheader("Clustering Parameters")
+                    min_cluster_size_val = st.slider(
+                        "Min Cluster Size",
+                        min_value=2,
+                        max_value=50,
+                        value=st.session_state['min_cluster_size'],
+                        help="Minimum size of each cluster in HDBSCAN; In other words, it's the minimum number of documents/texts that must be grouped together to form a valid cluster.\n\n- A larger value (e.g., 20) will result in fewer, larger clusters\n- A smaller value (e.g., 2-5) will allow for more clusters, including smaller ones\n- Documents that don't fit into any cluster meeting this minimum size requirement are labeled as noise (typically assigned to cluster -1)"
+                    )
+                    
+                    run_clustering = st.form_submit_button("Run Clustering")
+                    
+                    if run_clustering:
+                        st.session_state.active_tab_index = tabs_titles.index("Clustering")
+                        with st.spinner("Performing clustering..."):
+                            # Clear any existing summary data when clustering is run
+                            if 'summary_df' in st.session_state:
+                                del st.session_state['summary_df']
+                            if 'high_level_summary' in st.session_state:
+                                del st.session_state['high_level_summary']
+                            if 'enhanced_summary' in st.session_state:
+                                del st.session_state['enhanced_summary']
 
-                if st.button("Run Clustering"):
-                    with st.spinner("Performing clustering..."):
-                        # Clear any existing summary data when clustering is run
-                        if 'summary_df' in st.session_state:
-                            del st.session_state['summary_df']
-                        if 'high_level_summary' in st.session_state:
-                            del st.session_state['high_level_summary']
-                        if 'enhanced_summary' in st.session_state:
-                            del st.session_state['enhanced_summary']
-
-                        dfc = df_to_cluster.copy().fillna("")
-                        dfc['text'] = dfc[text_columns].astype(str).agg(' '.join, axis=1)
+                            dfc = df_to_cluster.copy().fillna("")
+                            dfc['text'] = dfc[text_columns].astype(str).agg(' '.join, axis=1)
 
                         # Filter embeddings to those rows
                         selected_indices = dfc.index
@@ -1266,6 +1275,7 @@ with tab_clustering:
                             if len(texts_cleaned) < min_cluster_size_val:
                                 st.error(f"Not enough documents to form clusters. You have {len(texts_cleaned)} documents but minimum cluster size is set to {min_cluster_size_val}.")
                                 st.session_state['clustering_error'] = "Insufficient documents for clustering"
+                                st.session_state.active_tab_index = tabs_titles.index("Clustering")
                                 st.stop()
 
                             # Convert embeddings to CPU numpy if needed
@@ -1278,6 +1288,7 @@ with tab_clustering:
                             if embeddings_for_clustering.shape[0] != len(texts_cleaned):
                                 st.error("Mismatch between number of embeddings and texts.")
                                 st.session_state['clustering_error'] = "Embedding and text count mismatch"
+                                st.session_state.active_tab_index = tabs_titles.index("Clustering")
                                 st.stop()
 
                             # Build the HDBSCAN model with error handling
@@ -1310,6 +1321,7 @@ with tab_clustering:
                                         if non_noise_docs < min_cluster_size_val:
                                             st.error("Not enough documents were successfully clustered. Try reducing the minimum cluster size.")
                                             st.session_state['clustering_error'] = "Insufficient clustered documents"
+                                            st.session_state.active_tab_index = tabs_titles.index("Clustering")
                                             st.stop()
 
                                 # Store results if validation passes
@@ -1353,12 +1365,14 @@ with tab_clustering:
                                 else:
                                     st.error(f"Clustering error: {str(ve)}")
                                 st.session_state['clustering_error'] = str(ve)
+                                st.session_state.active_tab_index = tabs_titles.index("Clustering")
                                 st.stop()
 
                         except Exception as e:
                             st.error(f"An error occurred during clustering: {str(e)}")
                             st.session_state['clustering_error'] = str(e)
                             st.session_state['clustering_completed'] = False
+                            st.session_state.active_tab_index = tabs_titles.index("Clustering")
                             st.stop()
 
                 # Display clustering results if they exist
