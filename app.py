@@ -1405,42 +1405,10 @@ Focus on key points, insights, or patterns that emerge from the text."""
                             if not combined_text.strip():
                                 st.warning("No text data available for summarization.")
                             else:
-                                # Generate High-Level Summary
-                                user_prompt = f"**Text to summarize**: {combined_text}"
-                                system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
-                                human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                                chat_prompt = ChatPromptTemplate.from_messages([system_message, human_message])
-
-                                with st.spinner("Generating high-level summary..."):
-                                    chain = LLMChain(llm=llm, prompt=chat_prompt)
-                                    high_level_summary = chain.run(user_prompt=user_prompt).strip()
-                                    # Store the high-level summary in session state
-                                    st.session_state['high_level_summary'] = high_level_summary
-
-                                # For cluster-specific summaries, use the same customized prompt
+                                # For cluster-specific summaries, use the customized prompt
                                 local_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
                                 local_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
                                 local_chat_prompt = ChatPromptTemplate.from_messages([local_system_message, local_human_message])
-
-                                # Possibly add references to high-level summary
-                                if enable_references and reference_id_column:
-                                    with st.spinner("Adding references to high-level summary..."):
-                                        enhanced_summary = add_references_to_summary(
-                                            high_level_summary,
-                                            df_scope,
-                                            reference_id_column,
-                                            url_column if add_hyperlinks else None,
-                                            llm
-                                        )
-                                    # Store the enhanced summary in session state
-                                    st.session_state['enhanced_summary'] = enhanced_summary
-                                    st.write("### High-Level Summary (with references):")
-                                    st.markdown(enhanced_summary, unsafe_allow_html=True)
-                                    with st.expander("View original summary (without references)"):
-                                        st.write(high_level_summary)
-                                else:
-                                    st.write("### High-Level Summary:")
-                                    st.write(high_level_summary)
 
                                 # Summaries per cluster
                                 # Only if multiple clusters are selected
@@ -1486,9 +1454,51 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                         st.session_state['has_references'] = enable_references
                                         st.session_state['reference_id_column'] = reference_id_column
                                         st.session_state['url_column'] = url_column if add_hyperlinks else None
-                                        # Display
+                                        
+                                        # Now generate high-level summary from the cluster summaries
+                                        with st.spinner("Generating high-level summary from cluster summaries..."):
+                                            # Combine all summaries into one text
+                                            all_summaries_text = "\n\n".join([
+                                                f"Cluster {row['Topic']} Summary:\n{row['Summary']}"
+                                                for _, row in summary_df.iterrows()
+                                            ])
+                                            
+                                            # Create a prompt for the high-level summary
+                                            high_level_prompt = f"""Below are summaries from different clusters of results made by using Transformers NLP on set of results from projects. This is coming from the CGIAR reporting system. 
+Please create a comprehensive high-level summary that synthesizes the clusters so that both the main themes and findings across all clusters are covered but in an organized way. It is okay if the summary is long:
+
+{all_summaries_text}"""
+                                            
+                                            # Generate the high-level summary
+                                            high_level_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
+                                            high_level_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                                            high_level_chat_prompt = ChatPromptTemplate.from_messages([high_level_system_message, high_level_human_message])
+                                            high_level_chain = LLMChain(llm=llm, prompt=high_level_chat_prompt)
+                                            high_level_summary = high_level_chain.run(user_prompt=high_level_prompt).strip()
+                                            st.session_state['high_level_summary'] = high_level_summary
+
+                                            # Add references to high-level summary if enabled
+                                            if enable_references and reference_id_column:
+                                                with st.spinner("Adding references to high-level summary..."):
+                                                    enhanced_summary = add_references_to_summary(
+                                                        high_level_summary,
+                                                        df_scope,
+                                                        reference_id_column,
+                                                        url_column if add_hyperlinks else None,
+                                                        llm
+                                                    )
+                                                st.session_state['enhanced_summary'] = enhanced_summary
+                                                st.write("### High-Level Summary (with references):")
+                                                st.markdown(enhanced_summary, unsafe_allow_html=True)
+                                                with st.expander("View original summary (without references)"):
+                                                    st.write(high_level_summary)
+                                            else:
+                                                st.write("### High-Level Summary:")
+                                                st.write(high_level_summary)
+
+                                        # Display cluster summaries
+                                        st.write("### Cluster Summaries:")
                                         if enable_references and 'Enhanced_Summary' in summary_df.columns:
-                                            st.write("### Summaries per Cluster (with references):")
                                             for idx, row in summary_df.iterrows():
                                                 st.write(f"**Topic {row['Topic']}**")
                                                 st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
