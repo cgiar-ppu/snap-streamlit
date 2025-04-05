@@ -777,7 +777,7 @@ if dataset_option == 'PRMS 2022+2023+2024 QAed':
 
         if 'filtered_df' in st.session_state:
             st.write("Filtered Data Preview:")
-            st.write(st.session_state['filtered_df'].head())
+            st.dataframe(st.session_state['filtered_df'].head(), hide_index=True)
             st.write(f"Total number of results: {len(st.session_state['filtered_df'])}")
 
             output = io.BytesIO()
@@ -840,7 +840,7 @@ else:
 
             st.session_state['filtered_df'] = filtered_df
             st.write("Filtered Data Preview:")
-            st.write(filtered_df.head())
+            st.dataframe(filtered_df.head(), hide_index=True)
             st.write(f"Total number of results: {len(filtered_df)}")
 
             output = io.BytesIO()
@@ -1051,7 +1051,7 @@ with tab_semantic:
                     st.write("## Search Results")
                     results = st.session_state['search_results']
                     cols_to_display = [c for c in results.columns if c != 'similarity_score'] + ['similarity_score']
-                    st.write(results[cols_to_display])
+                    st.dataframe(results[cols_to_display], hide_index=True)
                     st.write(f"Total number of results: {len(results)}")
 
                     if 'search_results_processed_data' in st.session_state:
@@ -1371,12 +1371,13 @@ with tab_clustering:
                                 "Top Keywords",
                                 help="Top 5 keywords that characterize this topic"
                             )
-                        }
+                        },
+                        hide_index=True
                     )
 
                     st.subheader("Clustering Results")
                     columns_to_display = [c for c in dfc.columns if c != 'text']
-                    st.write(dfc[columns_to_display])
+                    st.dataframe(dfc[columns_to_display], hide_index=True)
 
                     # Display stored visualizations with error handling
                     st.write("### Intertopic Distance Map")
@@ -1556,7 +1557,8 @@ with tab_summarization:
                             "Top Keywords",
                             help="Top 5 keywords that characterize this topic"
                         )
-                    }
+                    },
+                    hide_index=True
                 )
 
                 # Summarization settings
@@ -1771,15 +1773,15 @@ Here are the cluster summaries to synthesize:
                                         with st.expander("View original summaries in table format"):
                                             display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
                                             display_df.columns = ['Topic', 'Cluster Name', 'Summary']
-                                            st.dataframe(display_df)
+                                            st.dataframe(display_df, hide_index=True)
                                     else:
                                         st.write("### Summaries per Cluster:")
                                         if 'Cluster_Name' in summary_df.columns:
                                             display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
                                             display_df.columns = ['Topic', 'Cluster Name', 'Summary']
-                                            st.dataframe(display_df)
+                                            st.dataframe(display_df, hide_index=True)
                                         else:
-                                            st.dataframe(summary_df)
+                                            st.dataframe(summary_df, hide_index=True)
 
                                     # Download
                                     if 'Enhanced_Summary' in summary_df.columns:
@@ -1817,9 +1819,9 @@ Here are the cluster summaries to synthesize:
                 with st.expander("View original summaries in table format"):
                     display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
                     display_df.columns = ['Topic', 'Cluster Name', 'Summary']
-                    st.dataframe(display_df)
+                    st.dataframe(display_df, hide_index=True)
             else:
-                st.dataframe(summary_df)
+                st.dataframe(summary_df, hide_index=True)
 
             # Add download button for existing summaries
             dl_df = summary_df[['Topic', 'Cluster_Name', 'Summary']] if 'Cluster_Name' in summary_df.columns else summary_df
@@ -2128,7 +2130,7 @@ with tab_internal:
     hierarchy = st.session_state.get('hierarchy', pd.DataFrame())
     st.subheader("Hierarchical Topics DataFrame")
     if not hierarchy.empty:
-        st.dataframe(hierarchy)
+        st.dataframe(hierarchy, hide_index=True)
     else:
         st.write("No hierarchical topics data available.")
 
