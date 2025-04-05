@@ -1600,15 +1600,25 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                     
                                     # Now generate high-level summary from the cluster summaries
                                     with st.spinner("Generating high-level summary from cluster summaries..."):
-                                        # Combine all summaries into one text
-                                        all_summaries_text = "\n\n".join([
-                                            f"Cluster {row['Topic']} Summary:\n{row['Summary']}"
-                                            for _, row in summary_df.iterrows()
-                                        ])
+                                        # Format cluster summaries with proper markdown and HTML
+                                        formatted_summaries = []
+                                        for _, row in summary_df.iterrows():
+                                            summary_text = row.get('Enhanced_Summary', row['Summary'])
+                                            formatted_summaries.append(
+                                                f"### Cluster {row['Topic']} Summary:\n\n{summary_text}"
+                                            )
+                                        all_summaries_text = "\n\n".join(formatted_summaries)
                                         
                                         # Create a prompt for the high-level summary
-                                        high_level_prompt = f"""Below are summaries from different clusters of results made by using Transformers NLP on set of results from projects. This is coming from the CGIAR reporting system. 
-Please create a comprehensive high-level summary that synthesizes the clusters so that both the main themes and findings across all clusters are covered but in an organized way. It is okay if the summary is long:
+                                        high_level_prompt = f"""Below are summaries from different clusters of results made using Transformers NLP on a set of results from projects in the CGIAR reporting system. Each summary contains references to source documents in the form of hyperlinked IDs like [ID] or <a href="...">ID</a>.
+
+Please create a comprehensive high-level summary that synthesizes the clusters so that both the main themes and findings across all clusters are covered in an organized way. IMPORTANT: 
+1. Preserve all hyperlinked references exactly as they appear in the input summaries
+2. Maintain the HTML anchor tags (<a href="...">) intact when using information from the summaries
+3. Keep the markdown formatting for better readability
+4. It is okay if the summary is long
+
+Here are the cluster summaries to synthesize:
 
 {all_summaries_text}"""
                                         
@@ -1618,26 +1628,14 @@ Please create a comprehensive high-level summary that synthesizes the clusters s
                                         high_level_chat_prompt = ChatPromptTemplate.from_messages([high_level_system_message, high_level_human_message])
                                         high_level_chain = LLMChain(llm=llm, prompt=high_level_chat_prompt)
                                         high_level_summary = high_level_chain.run(user_prompt=high_level_prompt).strip()
+                                        
+                                        # Store both versions of the summary
                                         st.session_state['high_level_summary'] = high_level_summary
-
-                                        # Add references to high-level summary if enabled
-                                        if enable_references and reference_id_column:
-                                            with st.spinner("Adding references to high-level summary..."):
-                                                enhanced_summary = add_references_to_summary(
-                                                    high_level_summary,
-                                                    df_scope,
-                                                    reference_id_column,
-                                                    url_column if add_hyperlinks else None,
-                                                    llm
-                                                )
-                                            st.session_state['enhanced_summary'] = enhanced_summary
-                                            st.write("### High-Level Summary (with references):")
-                                            st.markdown(enhanced_summary, unsafe_allow_html=True)
-                                            with st.expander("View original summary (without references)"):
-                                                st.write(high_level_summary)
-                                        else:
-                                            st.write("### High-Level Summary:")
-                                            st.write(high_level_summary)
+                                        st.session_state['enhanced_summary'] = high_level_summary
+                                        
+                                        # Display the summary with HTML support
+                                        st.write("### High-Level Summary:")
+                                        st.markdown(high_level_summary, unsafe_allow_html=True)
 
                                     # Display cluster summaries
                                     st.write("### Cluster Summaries:")
