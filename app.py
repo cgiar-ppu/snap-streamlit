@@ -143,7 +143,7 @@ def process_summaries_in_parallel(
     
     try:
         # Phase 1: Generate raw summaries in parallel
-        progress_text.text(f"Phase 1/2: Generating cluster summaries in parallel (0/{total_topics} completed)")
+        progress_text.text(f"Phase 1/3: Generating cluster summaries in parallel (0/{total_topics} completed)")
         completed_summaries = 0
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -170,7 +170,7 @@ def process_summaries_in_parallel(
                     progress = completed_summaries / total_topics
                     progress_bar.progress(progress)
                     progress_text.text(
-                        f"Phase 1/2: Generating cluster summaries in parallel ({completed_summaries}/{total_topics} completed)"
+                        f"Phase 1/3: Generating cluster summaries in parallel ({completed_summaries}/{total_topics} completed)"
                     )
                 except Exception as e:
                     topic_val = future_to_topic[future]
@@ -182,7 +182,7 @@ def process_summaries_in_parallel(
         if enable_references and reference_id_column and summaries:
             total_to_enhance = len(summaries)
             completed_enhancements = 0
-            progress_text.text(f"Phase 2/2: Adding references to summaries (0/{total_to_enhance} completed)")
+            progress_text.text(f"Phase 2/3: Adding references to summaries (0/{total_to_enhance} completed)")
             progress_bar.progress(0)
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -211,7 +211,7 @@ def process_summaries_in_parallel(
                         progress = completed_enhancements / total_to_enhance
                         progress_bar.progress(progress)
                         progress_text.text(
-                            f"Phase 2/2: Adding references to summaries ({completed_enhancements}/{total_to_enhance} completed)"
+                            f"Phase 2/3: Adding references to summaries ({completed_enhancements}/{total_to_enhance} completed)"
                         )
                     except Exception as e:
                         topic_val = future_to_summary[future]
@@ -220,12 +220,90 @@ def process_summaries_in_parallel(
                         continue
                 
                 summaries = enhanced_summaries
+
+        # Phase 3: Generate cluster names in parallel
+        if summaries:
+            total_to_name = len(summaries)
+            completed_names = 0
+            progress_text.text(f"Phase 3/3: Generating cluster names (0/{total_to_name} completed)")
+            progress_bar.progress(0)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit cluster naming tasks
+                future_to_summary = {
+                    executor.submit(
+                        generate_cluster_name,
+                        summary_dict.get('Enhanced_Summary', summary_dict['Summary']),
+                        llm
+                    ): summary_dict.get('Topic')
+                    for summary_dict in summaries
+                }
+
+                # Process completed naming tasks
+                named_summaries = []
+                for future in future_to_summary:
+                    try:
+                        cluster_name = future.result()
+                        topic_val = future_to_summary[future]
+                        # Find the corresponding summary dict
+                        summary_dict = next(s for s in summaries if s['Topic'] == topic_val)
+                        summary_dict['Cluster_Name'] = cluster_name
+                        named_summaries.append(summary_dict)
+                        completed_names += 1
+                        # Update progress
+                        progress = completed_names / total_to_name
+                        progress_bar.progress(progress)
+                        progress_text.text(
+                            f"Phase 3/3: Generating cluster names ({completed_names}/{total_to_name} completed)"
+                        )
+                    except Exception as e:
+                        topic_val = future_to_summary[future]
+                        st.error(f"Error in cluster naming for cluster {topic_val}: {str(e)}")
+                        completed_names += 1
+                        continue
+
+                summaries = named_summaries
     finally:
         # Clean up progress indicators
         progress_text.empty()
         progress_bar.empty()
     
     return summaries
+
+###############################################################################
+# Helper: Generate cluster name
+###############################################################################
+def generate_cluster_name(summary_text: str, llm: Any) -> str:
+    """Generate a concise, descriptive name for a cluster based on its summary."""
+    system_prompt = """You are a cluster naming expert. Your task is to generate a very concise (3-6 words) but descriptive name for a cluster based on its summary. The name should capture the main theme or focus of the cluster.
+
+Rules:
+1. Keep it between 3-6 words
+2. Be specific but concise
+3. Capture the main theme/focus
+4. Use title case
+4. Do not include words like "Cluster", "Topic", or "Theme"
+5. Focus on the content, not metadata
+
+Example good names:
+- Agricultural Water Management Innovation
+- Gender Equality in Farming
+- Climate-Smart Village Implementation
+- Sustainable Livestock Practices"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Generate a concise cluster name based on this summary:\n\n{summary_text}"}
+    ]
+
+    try:
+        response = get_chat_response(messages)
+        # Clean up response (remove quotes, newlines, etc.)
+        cluster_name = response.strip().strip('"').strip("'").strip()
+        return cluster_name
+    except Exception as e:
+        st.error(f"Error generating cluster name: {str(e)}")
+        return "Unnamed Cluster"
 
 ###############################################################################
 # Helper: Attempt to get this file's directory or fallback to current working dir
@@ -1270,10 +1348,24 @@ with tab_clustering:
                             top_keywords = "N/A"
                         cluster_info.append((t, count, top_keywords))
                     cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+
+                    # If we have cluster names from summarization, add them
+                    if 'summary_df' in st.session_state and 'Cluster_Name' in st.session_state['summary_df'].columns:
+                        summary_df = st.session_state['summary_df']
+                        cluster_df = cluster_df.merge(
+                            summary_df[['Topic', 'Cluster_Name']],
+                            on='Topic',
+                            how='left'
+                        )
+                        cluster_df['Cluster_Name'] = cluster_df['Cluster_Name'].fillna('Unnamed Cluster')
+                        # Reorder columns to show name after topic
+                        cluster_df = cluster_df[['Topic', 'Cluster_Name', 'Count', 'Top Keywords']]
+
                     st.dataframe(
                         cluster_df,
                         column_config={
                             "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                            "Cluster_Name": st.column_config.TextColumn("Cluster Name", help="AI-generated name describing the cluster theme"),
                             "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
                             "Top Keywords": st.column_config.TextColumn(
                                 "Top Keywords",
@@ -1440,8 +1532,32 @@ with tab_summarization:
                         top_keywords = "N/A"
                     cluster_info.append((t, count, top_keywords))
                 cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+
+                # If we have cluster names from previous summarization, add them
+                if 'summary_df' in st.session_state and 'Cluster_Name' in st.session_state['summary_df'].columns:
+                    summary_df = st.session_state['summary_df']
+                    cluster_df = cluster_df.merge(
+                        summary_df[['Topic', 'Cluster_Name']],
+                        on='Topic',
+                        how='left'
+                    )
+                    cluster_df['Cluster_Name'] = cluster_df['Cluster_Name'].fillna('Unnamed Cluster')
+                    # Reorder columns to show name after topic
+                    cluster_df = cluster_df[['Topic', 'Cluster_Name', 'Count', 'Top Keywords']]
+                    
                 st.write("Available Clusters:")
-                st.dataframe(cluster_df)
+                st.dataframe(
+                    cluster_df,
+                    column_config={
+                        "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                        "Cluster_Name": st.column_config.TextColumn("Cluster Name", help="AI-generated name describing the cluster theme"),
+                        "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                        "Top Keywords": st.column_config.TextColumn(
+                            "Top Keywords",
+                            help="Top 5 keywords that characterize this topic"
+                        )
+                    }
+                )
 
                 # Summarization settings
                 st.subheader("Summarization Settings")
@@ -1451,7 +1567,14 @@ with tab_summarization:
                     ["All clusters", "Specific clusters"]
                 )
                 if summary_scope == "Specific clusters":
-                    selected_topics = st.multiselect("Select clusters to summarize", topics)
+                    # Format options to include cluster names if available
+                    if 'Cluster_Name' in cluster_df.columns:
+                        topic_options = [f"Cluster {t} - {name}" for t, name in zip(cluster_df['Topic'], cluster_df['Cluster_Name'])]
+                        topic_to_id = {opt: t for opt, t in zip(topic_options, cluster_df['Topic'])}
+                        selected_topic_options = st.multiselect("Select clusters to summarize", topic_options)
+                        selected_topics = [topic_to_id[opt] for opt in selected_topic_options]
+                    else:
+                        selected_topics = st.multiselect("Select clusters to summarize", topics)
                 else:
                     selected_topics = topics
 
@@ -1641,18 +1764,27 @@ Here are the cluster summaries to synthesize:
                                     st.write("### Cluster Summaries:")
                                     if enable_references and 'Enhanced_Summary' in summary_df.columns:
                                         for idx, row in summary_df.iterrows():
-                                            st.write(f"**Topic {row['Topic']}**")
+                                            cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
+                                            st.write(f"**Topic {row['Topic']} - {cluster_name}**")
                                             st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
                                             st.write("---")
                                         with st.expander("View original summaries in table format"):
-                                            st.dataframe(summary_df[['Topic', 'Summary']])
+                                            display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
+                                            display_df.columns = ['Topic', 'Cluster Name', 'Summary']
+                                            st.dataframe(display_df)
                                     else:
                                         st.write("### Summaries per Cluster:")
-                                        st.dataframe(summary_df)
+                                        if 'Cluster_Name' in summary_df.columns:
+                                            display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
+                                            display_df.columns = ['Topic', 'Cluster Name', 'Summary']
+                                            st.dataframe(display_df)
+                                        else:
+                                            st.dataframe(summary_df)
 
                                     # Download
                                     if 'Enhanced_Summary' in summary_df.columns:
-                                        dl_df = summary_df[['Topic', 'Summary']]
+                                        dl_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
+                                        dl_df.columns = ['Topic', 'Cluster Name', 'Summary']
                                     else:
                                         dl_df = summary_df
                                     csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
@@ -1678,16 +1810,21 @@ Here are the cluster summaries to synthesize:
             summary_df = st.session_state['summary_df']
             if 'Enhanced_Summary' in summary_df.columns:
                 for idx, row in summary_df.iterrows():
-                    st.write(f"**Topic {row['Topic']}**")
+                    cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
+                    st.write(f"**Topic {row['Topic']} - {cluster_name}**")
                     st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
                     st.write("---")
                 with st.expander("View original summaries in table format"):
-                    st.dataframe(summary_df[['Topic', 'Summary']])
+                    display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
+                    display_df.columns = ['Topic', 'Cluster Name', 'Summary']
+                    st.dataframe(display_df)
             else:
                 st.dataframe(summary_df)
 
             # Add download button for existing summaries
-            dl_df = summary_df[['Topic', 'Summary']] if 'Enhanced_Summary' in summary_df.columns else summary_df
+            dl_df = summary_df[['Topic', 'Cluster_Name', 'Summary']] if 'Cluster_Name' in summary_df.columns else summary_df
+            if 'Cluster_Name' in dl_df.columns:
+                dl_df.columns = ['Topic', 'Cluster Name', 'Summary']
             csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
             b64 = base64.b64encode(csv_bytes).decode()
             href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
@@ -1830,11 +1967,27 @@ with tab_chat:
             )
             if cluster_option == "Specific Cluster":
                 unique_topics = sorted(df_chat['Topic'].unique())
-                selected_cluster = st.selectbox(
-                    "Select cluster to focus on:",
-                    unique_topics,
-                    format_func=lambda x: f"Cluster {x}"
-                )
+                # Check if we have cluster names
+                if 'summary_df' in st.session_state and 'Cluster_Name' in st.session_state['summary_df'].columns:
+                    summary_df = st.session_state['summary_df']
+                    # Create a mapping of topic to name
+                    topic_names = {t: name for t, name in zip(summary_df['Topic'], summary_df['Cluster_Name'])}
+                    # Format the selectbox options
+                    topic_options = [
+                        (t, f"Cluster {t} - {topic_names.get(t, 'Unnamed Cluster')}")
+                        for t in unique_topics
+                    ]
+                    selected_cluster = st.selectbox(
+                        "Select cluster to focus on:",
+                        [t[0] for t in topic_options],
+                        format_func=lambda x: next(opt[1] for opt in topic_options if opt[0] == x)
+                    )
+                else:
+                    selected_cluster = st.selectbox(
+                        "Select cluster to focus on:",
+                        unique_topics,
+                        format_func=lambda x: f"Cluster {x}"
+                    )
                 if selected_cluster is not None:
                     df_chat = df_chat[df_chat['Topic'] == selected_cluster]
 
