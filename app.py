@@ -992,47 +992,104 @@ with tab_clustering:
                                 texts_cleaned.append(text)
 
                         try:
-                            # Build the HDBSCAN model
-                            hdbscan_model = HDBSCAN(
-                                min_cluster_size=min_cluster_size_val, 
-                                metric='euclidean', 
-                                cluster_selection_method='eom'
-                            )
-                            # Build the BERTopic model
-                            topic_model = BERTopic(
-                                embedding_model=get_embedding_model(),
-                                hdbscan_model=hdbscan_model
-                            )
+                            # Validation checks before clustering
+                            if len(texts_cleaned) < min_cluster_size_val:
+                                st.error(f"Not enough documents to form clusters. You have {len(texts_cleaned)} documents but minimum cluster size is set to {min_cluster_size_val}.")
+                                st.session_state['clustering_error'] = "Insufficient documents for clustering"
+                                st.stop()
+
                             # Convert embeddings to CPU numpy if needed
                             if torch.is_tensor(embeddings_clustering):
                                 embeddings_for_clustering = embeddings_clustering.cpu().numpy()
                             else:
                                 embeddings_for_clustering = embeddings_clustering
 
-                            topics, _ = topic_model.fit_transform(
-                                texts_cleaned, 
-                                embeddings=embeddings_for_clustering
-                            )
-                            dfc['Topic'] = topics
+                            # Additional validation
+                            if embeddings_for_clustering.shape[0] != len(texts_cleaned):
+                                st.error("Mismatch between number of embeddings and texts.")
+                                st.session_state['clustering_error'] = "Embedding and text count mismatch"
+                                st.stop()
 
-                            # Store all results in session state
-                            st.session_state['topic_model'] = topic_model
-                            st.session_state['clustered_data'] = dfc.copy()
-                            st.session_state['clustering_texts_cleaned'] = texts_cleaned
-                            st.session_state['clustering_embeddings'] = embeddings_for_clustering
-                            st.session_state['clustering_completed'] = True
+                            # Build the HDBSCAN model with error handling
+                            try:
+                                hdbscan_model = HDBSCAN(
+                                    min_cluster_size=min_cluster_size_val, 
+                                    metric='euclidean', 
+                                    cluster_selection_method='eom'
+                                )
+                                
+                                # Build the BERTopic model
+                                topic_model = BERTopic(
+                                    embedding_model=get_embedding_model(),
+                                    hdbscan_model=hdbscan_model
+                                )
 
-                            # Compute and store visualizations
-                            st.session_state['intertopic_distance_fig'] = topic_model.visualize_topics()
-                            st.session_state['topic_document_fig'] = topic_model.visualize_documents(texts_cleaned, embeddings=embeddings_for_clustering)
-                            hierarchy = topic_model.hierarchical_topics(texts_cleaned)
-                            st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
-                            st.session_state['hierarchy_fig'] = topic_model.visualize_hierarchy()
+                                # Fit the model and get topics
+                                topics, probs = topic_model.fit_transform(
+                                    texts_cleaned, 
+                                    embeddings=embeddings_for_clustering
+                                )
+
+                                # Validate clustering results
+                                unique_topics = set(topics)
+                                if len(unique_topics) < 2:
+                                    st.warning("Clustering resulted in too few clusters. Retry or try reducing the minimum cluster size.")
+                                    if -1 in unique_topics:
+                                        non_noise_docs = sum(1 for t in topics if t != -1)
+                                        st.info(f"Only {non_noise_docs} documents were assigned to clusters. The rest were marked as noise (-1).")
+                                        if non_noise_docs < min_cluster_size_val:
+                                            st.error("Not enough documents were successfully clustered. Try reducing the minimum cluster size.")
+                                            st.session_state['clustering_error'] = "Insufficient clustered documents"
+                                            st.stop()
+
+                                # Store results if validation passes
+                                dfc['Topic'] = topics
+                                st.session_state['topic_model'] = topic_model
+                                st.session_state['clustered_data'] = dfc.copy()
+                                st.session_state['clustering_texts_cleaned'] = texts_cleaned
+                                st.session_state['clustering_embeddings'] = embeddings_for_clustering
+                                st.session_state['clustering_completed'] = True
+
+                                # Try to generate visualizations with error handling
+                                try:
+                                    st.session_state['intertopic_distance_fig'] = topic_model.visualize_topics()
+                                except Exception as viz_error:
+                                    st.warning("Could not generate topic visualization. This usually happens when there are too few total clusters. Try adjusting the minimum cluster size or adding more documents.")
+                                    st.session_state['intertopic_distance_fig'] = None
+
+                                try:
+                                    st.session_state['topic_document_fig'] = topic_model.visualize_documents(
+                                        texts_cleaned, 
+                                        embeddings=embeddings_for_clustering
+                                    )
+                                except Exception as viz_error:
+                                    st.warning("Could not generate document visualization. This might happen when the clustering results are not optimal. Try adjusting the clustering parameters.")
+                                    st.session_state['topic_document_fig'] = None
+
+                                try:
+                                    hierarchy = topic_model.hierarchical_topics(texts_cleaned)
+                                    st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
+                                    st.session_state['hierarchy_fig'] = topic_model.visualize_hierarchy()
+                                except Exception as viz_error:
+                                    st.warning("Could not generate topic hierarchy visualization. This usually happens when there aren't enough distinct topics to form a hierarchy.")
+                                    st.session_state['hierarchy'] = pd.DataFrame()
+                                    st.session_state['hierarchy_fig'] = None
+
+                            except ValueError as ve:
+                                if "zero-size array to reduction operation maximum which has no identity" in str(ve):
+                                    st.error("Clustering failed: No valid clusters could be formed. Try reducing the minimum cluster size.")
+                                elif "Cannot use scipy.linalg.eigh for sparse A with k > N" in str(ve):
+                                    st.error("Clustering failed: Too many components requested for the number of documents. Try with more documents or adjust clustering parameters.")
+                                else:
+                                    st.error(f"Clustering error: {str(ve)}")
+                                st.session_state['clustering_error'] = str(ve)
+                                st.stop()
 
                         except Exception as e:
-                            st.error(f"An error occurred during clustering: {e}")
+                            st.error(f"An error occurred during clustering: {str(e)}")
                             st.session_state['clustering_error'] = str(e)
                             st.session_state['clustering_completed'] = False
+                            st.stop()
 
                 # Display clustering results if they exist
                 if st.session_state.get('clustering_completed', False):
@@ -1069,15 +1126,27 @@ with tab_clustering:
                     columns_to_display = [c for c in dfc.columns if c != 'text']
                     st.write(dfc[columns_to_display])
 
-                    # Display stored visualizations
+                    # Display stored visualizations with error handling
                     st.write("### Intertopic Distance Map")
-                    st.plotly_chart(st.session_state['intertopic_distance_fig'])
+                    if st.session_state.get('intertopic_distance_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['intertopic_distance_fig'])
+                        except Exception:
+                            st.info("Topic visualization is not available for the current clustering results.")
 
                     st.write("### Topic Document Visualization")
-                    st.plotly_chart(st.session_state['topic_document_fig'])
+                    if st.session_state.get('topic_document_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['topic_document_fig'])
+                        except Exception:
+                            st.info("Document visualization is not available for the current clustering results.")
 
                     st.write("### Topic Hierarchy")
-                    st.plotly_chart(st.session_state['hierarchy_fig'])
+                    if st.session_state.get('hierarchy_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['hierarchy_fig'])
+                        except Exception:
+                            st.info("Topic hierarchy visualization is not available for the current clustering results.")
             else:
                 st.warning("No data available for clustering or embeddings not ready.")
     else:
