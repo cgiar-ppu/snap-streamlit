@@ -733,9 +733,15 @@ if dataset_option == 'PRMS 2022+2023+2024 QAed':
 
                 if clear_filters:
                     st.session_state['filter_values'] = {}
+                    # Clear any existing summary data when filters are cleared
+                    if 'summary_df' in st.session_state:
+                        del st.session_state['summary_df']
+                    if 'high_level_summary' in st.session_state:
+                        del st.session_state['high_level_summary']
+                    if 'enhanced_summary' in st.session_state:
+                        del st.session_state['enhanced_summary']
                     st.rerun()
-
-        # Text columns selection
+                # Text columns selection
         st.subheader("**Select Text Columns for Embedding**")
         default_text_cols = []
         if 'Title' in df.columns and 'Description' in df.columns:
@@ -750,8 +756,18 @@ if dataset_option == 'PRMS 2022+2023+2024 QAed':
         )
         st.session_state['text_columns'] = text_columns_selected
 
+
+        # Apply filters to the dataset
         filtered_df = df.copy()
         if 'apply_filters_submitted' in locals() and apply_filters_submitted:
+            # Clear any existing summary data when new filters are applied
+            if 'summary_df' in st.session_state:
+                del st.session_state['summary_df']
+            if 'high_level_summary' in st.session_state:
+                del st.session_state['high_level_summary']
+            if 'enhanced_summary' in st.session_state:
+                del st.session_state['enhanced_summary']
+            
             for col_name in st.session_state['additional_filters_selected']:
                 selected_vals = st.session_state['filter_values'].get(col_name, [])
                 if selected_vals:
@@ -979,6 +995,14 @@ with tab_semantic:
                 if submitted:
                     if query.strip():
                         with st.spinner("Performing Semantic Search..."):
+                            # Clear any existing summary data when new search is run
+                            if 'summary_df' in st.session_state:
+                                del st.session_state['summary_df']
+                            if 'high_level_summary' in st.session_state:
+                                del st.session_state['high_level_summary']
+                            if 'enhanced_summary' in st.session_state:
+                                del st.session_state['enhanced_summary']
+
                             model = get_embedding_model()
                             df_filtered = st.session_state['filtered_df'].fillna("")
                             search_texts = df_filtered[text_columns].agg(' '.join, axis=1).tolist()
@@ -1198,6 +1222,14 @@ with tab_clustering:
 
                 if st.button("Run Clustering"):
                     with st.spinner("Performing clustering..."):
+                        # Clear any existing summary data when clustering is run
+                        if 'summary_df' in st.session_state:
+                            del st.session_state['summary_df']
+                        if 'high_level_summary' in st.session_state:
+                            del st.session_state['high_level_summary']
+                        if 'enhanced_summary' in st.session_state:
+                            del st.session_state['enhanced_summary']
+
                         dfc = df_to_cluster.copy().fillna("")
                         dfc['text'] = dfc[text_columns].astype(str).agg(' '.join, axis=1)
 
@@ -1349,23 +1381,11 @@ with tab_clustering:
                         cluster_info.append((t, count, top_keywords))
                     cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
 
-                    # If we have cluster names from summarization, add them
-                    if 'summary_df' in st.session_state and 'Cluster_Name' in st.session_state['summary_df'].columns:
-                        summary_df = st.session_state['summary_df']
-                        cluster_df = cluster_df.merge(
-                            summary_df[['Topic', 'Cluster_Name']],
-                            on='Topic',
-                            how='left'
-                        )
-                        cluster_df['Cluster_Name'] = cluster_df['Cluster_Name'].fillna('Unnamed Cluster')
-                        # Reorder columns to show name after topic
-                        cluster_df = cluster_df[['Topic', 'Cluster_Name', 'Count', 'Top Keywords']]
-
+                    st.write("### Topic Overview")
                     st.dataframe(
                         cluster_df,
                         column_config={
                             "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
-                            "Cluster_Name": st.column_config.TextColumn("Cluster Name", help="AI-generated name describing the cluster theme"),
                             "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
                             "Top Keywords": st.column_config.TextColumn(
                                 "Top Keywords",
@@ -1537,16 +1557,14 @@ with tab_summarization:
                 # If we have cluster names from previous summarization, add them
                 if 'summary_df' in st.session_state and 'Cluster_Name' in st.session_state['summary_df'].columns:
                     summary_df = st.session_state['summary_df']
-                    cluster_df = cluster_df.merge(
-                        summary_df[['Topic', 'Cluster_Name']],
-                        on='Topic',
-                        how='left'
-                    )
-                    cluster_df['Cluster_Name'] = cluster_df['Cluster_Name'].fillna('Unnamed Cluster')
+                    # Create a mapping of topic to name for merging
+                    topic_names = {t: name for t, name in zip(summary_df['Topic'], summary_df['Cluster_Name'])}
+                    # Add cluster names to cluster_df
+                    cluster_df['Cluster_Name'] = cluster_df['Topic'].map(lambda x: topic_names.get(x, 'Unnamed Cluster'))
                     # Reorder columns to show name after topic
                     cluster_df = cluster_df[['Topic', 'Cluster_Name', 'Count', 'Top Keywords']]
                     
-                st.write("Available Clusters:")
+                st.write("### Available Clusters:")
                 st.dataframe(
                     cluster_df,
                     column_config={
@@ -1723,6 +1741,28 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                     st.session_state['reference_id_column'] = reference_id_column
                                     st.session_state['url_column'] = url_column if add_hyperlinks else None
                                     
+                                    # Update cluster_df with new names
+                                    if 'Cluster_Name' in summary_df.columns:
+                                        topic_names = {t: name for t, name in zip(summary_df['Topic'], summary_df['Cluster_Name'])}
+                                        cluster_df['Cluster_Name'] = cluster_df['Topic'].map(lambda x: topic_names.get(x, 'Unnamed Cluster'))
+                                        cluster_df = cluster_df[['Topic', 'Cluster_Name', 'Count', 'Top Keywords']]
+                                        
+                                        # Immediately display updated cluster overview
+                                        st.write("### Updated Topic Overview:")
+                                        st.dataframe(
+                                            cluster_df,
+                                            column_config={
+                                                "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                                                "Cluster_Name": st.column_config.TextColumn("Cluster Name", help="AI-generated name describing the cluster theme"),
+                                                "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                                                "Top Keywords": st.column_config.TextColumn(
+                                                    "Top Keywords",
+                                                    help="Top 5 keywords that characterize this topic"
+                                                )
+                                            },
+                                            hide_index=True
+                                        )
+                                        
                                     # Now generate high-level summary from the cluster summaries
                                     with st.spinner("Generating high-level summary from cluster summaries..."):
                                         # Format cluster summaries with proper markdown and HTML
@@ -1758,7 +1798,10 @@ Here are the cluster summaries to synthesize:
                                         st.session_state['high_level_summary'] = high_level_summary
                                         st.session_state['enhanced_summary'] = high_level_summary
                                         
-                                        # Display the summary with HTML support
+                                        # Set flag to indicate summarization is complete
+                                        st.session_state['summarization_completed'] = True
+                                        
+                                        # Update the display without rerunning
                                         st.write("### High-Level Summary:")
                                         st.markdown(high_level_summary, unsafe_allow_html=True)
 
@@ -1793,6 +1836,37 @@ Here are the cluster summaries to synthesize:
                                     b64 = base64.b64encode(csv_bytes).decode()
                                     href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
                                     st.markdown(href, unsafe_allow_html=True)
+
+        # Display existing summaries if available and summarization was completed
+        if st.session_state.get('summarization_completed', False):
+            if 'summary_df' in st.session_state and not st.session_state['summary_df'].empty:
+                if 'high_level_summary' in st.session_state:
+                    st.write("### High-Level Summary:")
+                    st.markdown(st.session_state['enhanced_summary'] if st.session_state.get('enhanced_summary') else st.session_state['high_level_summary'], unsafe_allow_html=True)
+
+                st.write("### Cluster Summaries:")
+                summary_df = st.session_state['summary_df']
+                if 'Enhanced_Summary' in summary_df.columns:
+                    for idx, row in summary_df.iterrows():
+                        cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
+                        st.write(f"**Topic {row['Topic']} - {cluster_name}**")
+                        st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
+                        st.write("---")
+                    with st.expander("View original summaries in table format"):
+                        display_df = summary_df[['Topic', 'Cluster_Name', 'Summary']]
+                        display_df.columns = ['Topic', 'Cluster Name', 'Summary']
+                        st.dataframe(display_df, hide_index=True)
+                else:
+                    st.dataframe(summary_df, hide_index=True)
+
+                # Add download button for existing summaries
+                dl_df = summary_df[['Topic', 'Cluster_Name', 'Summary']] if 'Cluster_Name' in summary_df.columns else summary_df
+                if 'Cluster_Name' in dl_df.columns:
+                    dl_df.columns = ['Topic', 'Cluster Name', 'Summary']
+                csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
+                b64 = base64.b64encode(csv_bytes).decode()
+                href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
+                st.markdown(href, unsafe_allow_html=True)
     else:
         st.warning("No data available for summarization.")
 
@@ -1896,68 +1970,78 @@ with tab_chat:
           - Explore relationships between findings
         """)
 
-    # Data selection for chat
+    # Function to check data source availability
+    def get_available_data_sources():
+        sources = []
+        if 'filtered_df' in st.session_state and not st.session_state['filtered_df'].empty:
+            sources.append("Filtered Dataset")
+        if 'clustered_data' in st.session_state and not st.session_state['clustered_data'].empty:
+            sources.append("Clustered Data")
+        if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+            sources.append("Search Results")
+        if ('high_level_summary' in st.session_state or 
+            ('summary_df' in st.session_state and not st.session_state['summary_df'].empty)):
+            sources.append("Summarized Data")
+        return sources
+
+    # Get available data sources
+    available_sources = get_available_data_sources()
+    
+    if not available_sources:
+        st.warning("No data available for chat. Please filter, cluster, search, or summarize first.")
+        st.stop()
+
+    # Initialize or update data source in session state
+    if 'chat_data_source' not in st.session_state:
+        st.session_state.chat_data_source = available_sources[0]
+    elif st.session_state.chat_data_source not in available_sources:
+        st.session_state.chat_data_source = available_sources[0]
+
+    # Data source selection with automatic fallback
     data_source = st.radio(
         "Select data to chat about:",
-        ["Filtered Dataset", "Clustered Data", "Search Results", "Summarized Data"],
+        available_sources,
+        index=available_sources.index(st.session_state.chat_data_source),
         help="Choose which dataset you want to analyze in the chat."
     )
 
+    # Update session state if data source changed
+    if data_source != st.session_state.chat_data_source:
+        st.session_state.chat_data_source = data_source
+        # Clear any cluster-specific selections if switching data sources
+        if 'chat_selected_cluster' in st.session_state:
+            del st.session_state.chat_selected_cluster
+
+    # Get the appropriate DataFrame based on selected source
     df_chat = None
-    if data_source == "Filtered Dataset" and 'filtered_df' in st.session_state and not st.session_state['filtered_df'].empty:
+    if data_source == "Filtered Dataset":
         df_chat = st.session_state['filtered_df']
-    elif data_source == "Clustered Data" and 'clustered_data' in st.session_state and not st.session_state['clustered_data'].empty:
+    elif data_source == "Clustered Data":
         df_chat = st.session_state['clustered_data']
-    elif data_source == "Search Results" and 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+    elif data_source == "Search Results":
         df_chat = st.session_state['search_results']
     elif data_source == "Summarized Data":
-        # Check if we have any summaries available
-        has_high_level = 'high_level_summary' in st.session_state
-        has_cluster_summaries = 'summary_df' in st.session_state and not st.session_state['summary_df'].empty
+        # Create DataFrame with selected summaries
+        summary_rows = []
         
-        if not (has_high_level or has_cluster_summaries):
-            st.warning("No summaries available. Please generate summaries in the Summarization tab first.")
-        else:
-            # Create a list of all available summaries
-            available_summaries = []
-            if has_high_level:
-                available_summaries.append("High-Level Summary")
-            if has_cluster_summaries:
-                available_summaries.extend([f"Cluster {t}" for t in st.session_state['summary_df']['Topic'].unique()])
-            
-            selected_summaries = st.multiselect(
-                "Select summaries to include:",
-                available_summaries,
-                default=available_summaries,
-                help="Choose which summaries to include in the chat context. You can select both the high-level summary and specific cluster summaries."
-            )
-            
-            if selected_summaries:
-                # Create DataFrame with selected summaries
-                summary_rows = []
-                
-                # Add high-level summary if selected
-                if "High-Level Summary" in selected_summaries and has_high_level:
-                    summary_rows.append({
-                        'Summary_Type': 'High-Level Summary',
-                        'Content': st.session_state.get('enhanced_summary', st.session_state['high_level_summary'])
-                    })
-                
-                # Add selected cluster summaries
-                if has_cluster_summaries:
-                    summary_df = st.session_state['summary_df']
-                    for cluster_name in selected_summaries:
-                        if cluster_name.startswith("Cluster "):
-                            topic_num = int(cluster_name.split(" ")[1])
-                            cluster_row = summary_df[summary_df['Topic'] == topic_num].iloc[0]
-                            summary_rows.append({
-                                'Summary_Type': f"Cluster {topic_num} Summary",
-                                'Content': cluster_row['Enhanced_Summary'] if 'Enhanced_Summary' in cluster_row else cluster_row['Summary']
-                            })
-                
-                df_chat = pd.DataFrame(summary_rows)
-            else:
-                st.warning("Please select at least one summary to chat about.")
+        # Add high-level summary if available
+        if 'high_level_summary' in st.session_state:
+            summary_rows.append({
+                'Summary_Type': 'High-Level Summary',
+                'Content': st.session_state.get('enhanced_summary', st.session_state['high_level_summary'])
+            })
+        
+        # Add cluster summaries if available
+        if 'summary_df' in st.session_state and not st.session_state['summary_df'].empty:
+            summary_df = st.session_state['summary_df']
+            for _, row in summary_df.iterrows():
+                summary_rows.append({
+                    'Summary_Type': f"Cluster {row['Topic']} Summary",
+                    'Content': row.get('Enhanced_Summary', row['Summary'])
+                })
+        
+        if summary_rows:
+            df_chat = pd.DataFrame(summary_rows)
 
     if df_chat is not None and not df_chat.empty:
         # If we have clustered data, allow cluster selection
@@ -1992,17 +2076,23 @@ with tab_chat:
                     )
                 if selected_cluster is not None:
                     df_chat = df_chat[df_chat['Topic'] == selected_cluster]
+                    st.session_state.chat_selected_cluster = selected_cluster
+            elif 'chat_selected_cluster' in st.session_state:
+                del st.session_state.chat_selected_cluster
 
         # Prepare the data for chat context
         text_columns = st.session_state.get('text_columns', [])
-        if text_columns:
-            # Instead of limiting to 210 documents, we'll limit by tokens
-            MAX_ALLOWED_TOKENS = int(MAX_CONTEXT_WINDOW * 0.95)  # 95% of context window
-            
-            # Prepare system message first to account for its tokens
-            system_msg = {
-                "role": "system",
-                "content": """You are a specialized assistant analyzing data from a research database. 
+        if not text_columns and data_source != "Summarized Data":
+            st.warning("No text columns selected. Please select text columns to enable chat functionality.")
+            st.stop()
+
+        # Instead of limiting to 210 documents, we'll limit by tokens
+        MAX_ALLOWED_TOKENS = int(MAX_CONTEXT_WINDOW * 0.95)  # 95% of context window
+        
+        # Prepare system message first to account for its tokens
+        system_msg = {
+            "role": "system",
+            "content": """You are a specialized assistant analyzing data from a research database. 
 Your role is to:
 1. Provide clear, concise answers based on the data provided
 2. Highlight relevant information from specific results when answering
@@ -2027,119 +2117,115 @@ The data is provided in a structured format where:""" + ("""
 - References are shown as [ID] or as clickable hyperlinks
 - Summaries may be high-level (covering all documents) or cluster-specific""") + """
 """
-            }
+        }
 
-            # Calculate system message tokens
-            system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
-            remaining_tokens = MAX_ALLOWED_TOKENS - system_tokens
+        # Calculate system message tokens
+        system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
+        remaining_tokens = MAX_ALLOWED_TOKENS - system_tokens
 
-            # Prepare the data context with token limiting
-            data_text = "Available Data:\n"
-            included_rows = 0
-            total_rows = len(df_chat)
+        # Prepare the data context with token limiting
+        data_text = "Available Data:\n"
+        included_rows = 0
+        total_rows = len(df_chat)
 
-            if data_source == "Summarized Data":
-                # For summarized data, process row by row
-                for idx, row in df_chat.iterrows():
-                    row_text = f"\n{row['Summary_Type']}:\n{row['Content']}\n"
-                    row_tokens = len(tokenizer(row_text)["input_ids"])
-                    
-                    if remaining_tokens - row_tokens > 0:
-                        data_text += row_text
-                        remaining_tokens -= row_tokens
-                        included_rows += 1
-                    else:
-                        break
-            else:
-                # For regular data, process row by row
-                for idx, row in df_chat.iterrows():
-                    row_text = f"\nItem {idx}:\n"
-                    for col in df_chat.columns:
-                        if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
-                            row_text += f"{col}: {row[col]}\n"
-                    
-                    row_tokens = len(tokenizer(row_text)["input_ids"])
-                    if remaining_tokens - row_tokens > 0:
-                        data_text += row_text
-                        remaining_tokens -= row_tokens
-                        included_rows += 1
-                    else:
-                        break
+        if data_source == "Summarized Data":
+            # For summarized data, process row by row
+            for idx, row in df_chat.iterrows():
+                row_text = f"\n{row['Summary_Type']}:\n{row['Content']}\n"
+                row_tokens = len(tokenizer(row_text)["input_ids"])
+                
+                if remaining_tokens - row_tokens > 0:
+                    data_text += row_text
+                    remaining_tokens -= row_tokens
+                    included_rows += 1
+                else:
+                    break
+        else:
+            # For regular data, process row by row
+            for idx, row in df_chat.iterrows():
+                row_text = f"\nItem {idx}:\n"
+                for col in df_chat.columns:
+                    if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
+                        row_text += f"{col}: {row[col]}\n"
+                
+                row_tokens = len(tokenizer(row_text)["input_ids"])
+                if remaining_tokens - row_tokens > 0:
+                    data_text += row_text
+                    remaining_tokens -= row_tokens
+                    included_rows += 1
+                else:
+                    break
 
-            # Calculate token usage
-            data_tokens = len(tokenizer(data_text)["input_ids"])
-            total_tokens = system_tokens + data_tokens
-            context_usage_percent = (total_tokens / MAX_CONTEXT_WINDOW) * 100
+        # Calculate token usage
+        data_tokens = len(tokenizer(data_text)["input_ids"])
+        total_tokens = system_tokens + data_tokens
+        context_usage_percent = (total_tokens / MAX_CONTEXT_WINDOW) * 100
 
-            # Display token usage and data coverage
-            st.subheader("Context Window Usage")
-            st.write(f"System Message: {system_tokens:,} tokens")
-            st.write(f"Data Context: {data_tokens:,} tokens")
-            st.write(f"Total: {total_tokens:,} tokens ({context_usage_percent:.1f}% of available context)")
-            st.write(f"Documents included: {included_rows:,} out of {total_rows:,} ({(included_rows/total_rows*100):.1f}%)")
-            
-            if context_usage_percent > 90:
-                st.warning("⚠️ High context usage! Consider reducing the number of results or filtering further.")
-            elif context_usage_percent > 75:
-                st.info("ℹ️ Moderate context usage. Still room for your question, but consider reducing results if asking a long question.")
+        # Display token usage and data coverage
+        st.subheader("Context Window Usage")
+        st.write(f"System Message: {system_tokens:,} tokens")
+        st.write(f"Data Context: {data_tokens:,} tokens")
+        st.write(f"Total: {total_tokens:,} tokens ({context_usage_percent:.1f}% of available context)")
+        st.write(f"Documents included: {included_rows:,} out of {total_rows:,} ({(included_rows/total_rows*100):.1f}%)")
+        
+        if context_usage_percent > 90:
+            st.warning("⚠️ High context usage! Consider reducing the number of results or filtering further.")
+        elif context_usage_percent > 75:
+            st.info("ℹ️ Moderate context usage. Still room for your question, but consider reducing results if asking a long question.")
 
-            # Add download button for chat context
-            chat_context = f"""System Message:
+        # Add download button for chat context
+        chat_context = f"""System Message:
 {system_msg['content']}
 
 {data_text}"""
-            st.download_button(
-                label="📥 Download Chat Context",
-                data=chat_context,
-                file_name="chat_context.txt",
-                mime="text/plain",
-                help="Download the exact context that the chatbot receives"
-            )
+        st.download_button(
+            label="📥 Download Chat Context",
+            data=chat_context,
+            file_name="chat_context.txt",
+            mime="text/plain",
+            help="Download the exact context that the chatbot receives"
+        )
 
-            # Chat interface
-            col_chat1, col_chat2 = st.columns([3, 1])
-            with col_chat1:
-                user_input = st.text_area("Ask a question about your data:", key="chat_input")
-            with col_chat2:
-                if st.button("Clear Chat History"):
-                    st.session_state.chat_history = []
-                    st.rerun()
+        # Chat interface
+        col_chat1, col_chat2 = st.columns([3, 1])
+        with col_chat1:
+            user_input = st.text_area("Ask a question about your data:", key="chat_input")
+        with col_chat2:
+            if st.button("Clear Chat History"):
+                st.session_state.chat_history = []
+                st.rerun()
 
-            # Store current tab index before processing
-            current_tab = tabs_titles.index("Chat")
-            
-            if st.button("Send", key="send_button"):
-                if user_input:
-                    # Set the active tab index to stay on Chat
-                    st.session_state.active_tab_index = current_tab
+        # Store current tab index before processing
+        current_tab = tabs_titles.index("Chat")
+        
+        if st.button("Send", key="send_button"):
+            if user_input:
+                # Set the active tab index to stay on Chat
+                st.session_state.active_tab_index = current_tab
+                
+                with st.spinner("Processing your question..."):
+                    # Add user's question to chat history
+                    st.session_state.chat_history.append({"role": "user", "content": user_input})
                     
-                    with st.spinner("Processing your question..."):
-                        # Add user's question to chat history
-                        st.session_state.chat_history.append({"role": "user", "content": user_input})
-                        
-                        # Prepare messages for API call
-                        messages = [system_msg]
-                        messages.append({"role": "user", "content": f"Here is the data to reference:\n\n{data_text}\n\nUser question: {user_input}"})
-                        
-                        # Get response from OpenAI
-                        response = get_chat_response(messages)
-                        
-                        if response:
-                            st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    # Prepare messages for API call
+                    messages = [system_msg]
+                    messages.append({"role": "user", "content": f"Here is the data to reference:\n\n{data_text}\n\nUser question: {user_input}"})
+                    
+                    # Get response from OpenAI
+                    response = get_chat_response(messages)
+                    
+                    if response:
+                        st.session_state.chat_history.append({"role": "assistant", "content": response})
 
-            # Display chat history
-            st.subheader("Chat History")
-            for message in st.session_state.chat_history:
-                if message["role"] == "user":
-                    st.write("**You:**", message["content"])
-                else:
-                    st.write("**Assistant:**")
-                    st.markdown(message["content"], unsafe_allow_html=True)
-                st.write("---")  # Add a separator between messages
-        else:
-            st.warning("No text columns selected. Please select text columns to enable chat functionality.")
-    else:
-        st.warning("No data available for chat. Please filter, cluster, or search first.")
+        # Display chat history
+        st.subheader("Chat History")
+        for message in st.session_state.chat_history:
+            if message["role"] == "user":
+                st.write("**You:**", message["content"])
+            else:
+                st.write("**Assistant:**")
+                st.markdown(message["content"], unsafe_allow_html=True)
+            st.write("---")  # Add a separator between messages
 
 
 ###############################################################################
