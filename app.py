@@ -1996,12 +1996,10 @@ with tab_chat:
         # Prepare the data for chat context
         text_columns = st.session_state.get('text_columns', [])
         if text_columns:
-            # Limit to 210 documents like in the example
-            if len(df_chat) > 210:
-                st.info("ℹ️ For optimal performance, the chat will only analyze the first 210 results.")
-                df_chat = df_chat.head(210)
-
-            # Prepare system message
+            # Instead of limiting to 210 documents, we'll limit by tokens
+            MAX_ALLOWED_TOKENS = int(MAX_CONTEXT_WINDOW * 0.95)  # 95% of context window
+            
+            # Prepare system message first to account for its tokens
             system_msg = {
                 "role": "system",
                 "content": """You are a specialized assistant analyzing data from a research database. 
@@ -2031,30 +2029,54 @@ The data is provided in a structured format where:""" + ("""
 """
             }
 
-            # Prepare the data context
+            # Calculate system message tokens
+            system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
+            remaining_tokens = MAX_ALLOWED_TOKENS - system_tokens
+
+            # Prepare the data context with token limiting
             data_text = "Available Data:\n"
+            included_rows = 0
+            total_rows = len(df_chat)
+
             if data_source == "Summarized Data":
+                # For summarized data, process row by row
                 for idx, row in df_chat.iterrows():
-                    data_text += f"\n{row['Summary_Type']}:\n"
-                    data_text += row['Content'] + "\n"
+                    row_text = f"\n{row['Summary_Type']}:\n{row['Content']}\n"
+                    row_tokens = len(tokenizer(row_text)["input_ids"])
+                    
+                    if remaining_tokens - row_tokens > 0:
+                        data_text += row_text
+                        remaining_tokens -= row_tokens
+                        included_rows += 1
+                    else:
+                        break
             else:
+                # For regular data, process row by row
                 for idx, row in df_chat.iterrows():
-                    data_text += f"\nItem {idx}:\n"
+                    row_text = f"\nItem {idx}:\n"
                     for col in df_chat.columns:
                         if not pd.isna(row[col]) and str(row[col]).strip() and col != 'similarity_score':
-                            data_text += f"{col}: {row[col]}\n"
+                            row_text += f"{col}: {row[col]}\n"
+                    
+                    row_tokens = len(tokenizer(row_text)["input_ids"])
+                    if remaining_tokens - row_tokens > 0:
+                        data_text += row_text
+                        remaining_tokens -= row_tokens
+                        included_rows += 1
+                    else:
+                        break
 
             # Calculate token usage
-            system_tokens = len(tokenizer(system_msg["content"])["input_ids"])
             data_tokens = len(tokenizer(data_text)["input_ids"])
             total_tokens = system_tokens + data_tokens
             context_usage_percent = (total_tokens / MAX_CONTEXT_WINDOW) * 100
 
-            # Display token usage
+            # Display token usage and data coverage
             st.subheader("Context Window Usage")
             st.write(f"System Message: {system_tokens:,} tokens")
             st.write(f"Data Context: {data_tokens:,} tokens")
             st.write(f"Total: {total_tokens:,} tokens ({context_usage_percent:.1f}% of available context)")
+            st.write(f"Documents included: {included_rows:,} out of {total_rows:,} ({(included_rows/total_rows*100):.1f}%)")
             
             if context_usage_percent > 90:
                 st.warning("⚠️ High context usage! Consider reducing the number of results or filtering further.")
