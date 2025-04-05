@@ -20,12 +20,13 @@ from datetime import datetime
 import base64
 import re
 import pickle
-from typing import List
+from typing import List, Dict, Any, Tuple
 import plotly.express as px
 import torch
 
-# For parallelism (if needed)
-# from concurrent.futures import ThreadPoolExecutor
+# For parallelism
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 # Import necessary libraries for embeddings, clustering, and summarization
 from sentence_transformers import SentenceTransformer
@@ -66,6 +67,165 @@ def get_chat_response(messages):
     except Exception as e:
         st.error(f"Error querying OpenAI: {e}")
         return None
+
+###############################################################################
+# Helper: Generate raw summary for a cluster (without references)
+###############################################################################
+def generate_raw_cluster_summary(
+    topic_val: int,
+    cluster_df: pd.DataFrame,
+    llm: Any,
+    chat_prompt: Any
+) -> Dict[str, Any]:
+    """Generate a summary for a single cluster without reference enhancement."""
+    cluster_text = " ".join(cluster_df['text'].tolist())
+    if not cluster_text.strip():
+        return None
+    
+    user_prompt_local = f"**Text to summarize**: {cluster_text}"
+    try:
+        local_chain = LLMChain(llm=llm, prompt=chat_prompt)
+        summary_local = local_chain.run(user_prompt=user_prompt_local).strip()
+        return {'Topic': topic_val, 'Summary': summary_local}
+    except Exception as e:
+        st.error(f"Error generating summary for cluster {topic_val}: {str(e)}")
+        return None
+
+###############################################################################
+# Helper: Enhance a summary with references
+###############################################################################
+def enhance_summary_with_references(
+    summary_dict: Dict[str, Any],
+    df_scope: pd.DataFrame,
+    reference_id_column: str,
+    url_column: str = None,
+    llm: Any = None
+) -> Dict[str, Any]:
+    """Add references to a summary."""
+    if not summary_dict or 'Summary' not in summary_dict:
+        return summary_dict
+    
+    try:
+        cluster_df = df_scope[df_scope['Topic'] == summary_dict['Topic']]
+        enhanced = add_references_to_summary(
+            summary_dict['Summary'],
+            cluster_df,
+            reference_id_column,
+            url_column,
+            llm
+        )
+        summary_dict['Enhanced_Summary'] = enhanced
+        return summary_dict
+    except Exception as e:
+        st.error(f"Error enhancing summary for cluster {summary_dict.get('Topic')}: {str(e)}")
+        return summary_dict
+
+###############################################################################
+# Helper: Process summaries in parallel
+###############################################################################
+def process_summaries_in_parallel(
+    df_scope: pd.DataFrame,
+    unique_selected_topics: List[int],
+    llm: Any,
+    chat_prompt: Any,
+    enable_references: bool = False,
+    reference_id_column: str = None,
+    url_column: str = None,
+    max_workers: int = 16
+) -> List[Dict[str, Any]]:
+    """Process multiple cluster summaries in parallel using ThreadPoolExecutor."""
+    summaries = []
+    total_topics = len(unique_selected_topics)
+    
+    # Create progress placeholders
+    progress_text = st.empty()
+    progress_bar = st.progress(0)
+    
+    try:
+        # Phase 1: Generate raw summaries in parallel
+        progress_text.text(f"Phase 1/2: Generating cluster summaries in parallel (0/{total_topics} completed)")
+        completed_summaries = 0
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit summary generation tasks
+            future_to_topic = {
+                executor.submit(
+                    generate_raw_cluster_summary,
+                    topic_val,
+                    df_scope[df_scope['Topic'] == topic_val],
+                    llm,
+                    chat_prompt
+                ): topic_val
+                for topic_val in unique_selected_topics
+            }
+            
+            # Process completed summary tasks
+            for future in future_to_topic:
+                try:
+                    result = future.result()
+                    if result:
+                        summaries.append(result)
+                    completed_summaries += 1
+                    # Update progress
+                    progress = completed_summaries / total_topics
+                    progress_bar.progress(progress)
+                    progress_text.text(
+                        f"Phase 1/2: Generating cluster summaries in parallel ({completed_summaries}/{total_topics} completed)"
+                    )
+                except Exception as e:
+                    topic_val = future_to_topic[future]
+                    st.error(f"Error in summary generation for cluster {topic_val}: {str(e)}")
+                    completed_summaries += 1
+                    continue
+        
+        # Phase 2: Enhance summaries with references in parallel (if enabled)
+        if enable_references and reference_id_column and summaries:
+            total_to_enhance = len(summaries)
+            completed_enhancements = 0
+            progress_text.text(f"Phase 2/2: Adding references to summaries (0/{total_to_enhance} completed)")
+            progress_bar.progress(0)
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit reference enhancement tasks
+                future_to_summary = {
+                    executor.submit(
+                        enhance_summary_with_references,
+                        summary_dict,
+                        df_scope,
+                        reference_id_column,
+                        url_column,
+                        llm
+                    ): summary_dict.get('Topic')
+                    for summary_dict in summaries
+                }
+                
+                # Process completed enhancement tasks
+                enhanced_summaries = []
+                for future in future_to_summary:
+                    try:
+                        result = future.result()
+                        if result:
+                            enhanced_summaries.append(result)
+                        completed_enhancements += 1
+                        # Update progress
+                        progress = completed_enhancements / total_to_enhance
+                        progress_bar.progress(progress)
+                        progress_text.text(
+                            f"Phase 2/2: Adding references to summaries ({completed_enhancements}/{total_to_enhance} completed)"
+                        )
+                    except Exception as e:
+                        topic_val = future_to_summary[future]
+                        st.error(f"Error in reference enhancement for cluster {topic_val}: {str(e)}")
+                        completed_enhancements += 1
+                        continue
+                
+                summaries = enhanced_summaries
+    finally:
+        # Clean up progress indicators
+        progress_text.empty()
+        progress_bar.empty()
+    
+    return summaries
 
 ###############################################################################
 # Helper: Attempt to get this file's directory or fallback to current working dir
@@ -1415,109 +1575,92 @@ Focus on key points, insights, or patterns that emerge from the text."""
                                 unique_selected_topics = df_scope['Topic'].unique()
                                 if len(unique_selected_topics) > 1:
                                     st.write("### Summaries per Selected Cluster")
-                                    summaries = []
-                                    for topic_val in unique_selected_topics:
-                                        cluster_df = df_scope[df_scope['Topic'] == topic_val]
-                                        cluster_text = " ".join(cluster_df['text'].tolist())
-                                        if not cluster_text.strip():
-                                            continue
-                                        user_prompt_local = f"**Text to summarize**: {cluster_text}"
-                                        with st.spinner(f"Summarizing cluster {topic_val}..."):
-                                            local_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
-                                            summary_local = local_chain.run(user_prompt=user_prompt_local).strip()
+                                    
+                                    # Process summaries in parallel
+                                    with st.spinner("Generating cluster summaries in parallel..."):
+                                        summaries = process_summaries_in_parallel(
+                                            df_scope=df_scope,
+                                            unique_selected_topics=unique_selected_topics,
+                                            llm=llm,
+                                            chat_prompt=local_chat_prompt,
+                                            enable_references=enable_references,
+                                            reference_id_column=reference_id_column,
+                                            url_column=url_column if add_hyperlinks else None,
+                                            max_workers=min(16, len(unique_selected_topics))  # Limit workers based on clusters
+                                        )
 
+                                if summaries:
+                                    summary_df = pd.DataFrame(summaries)
+                                    # Store the summaries DataFrame in session state
+                                    st.session_state['summary_df'] = summary_df
+                                    # Store additional summary info in session state
+                                    st.session_state['has_references'] = enable_references
+                                    st.session_state['reference_id_column'] = reference_id_column
+                                    st.session_state['url_column'] = url_column if add_hyperlinks else None
+                                    
+                                    # Now generate high-level summary from the cluster summaries
+                                    with st.spinner("Generating high-level summary from cluster summaries..."):
+                                        # Combine all summaries into one text
+                                        all_summaries_text = "\n\n".join([
+                                            f"Cluster {row['Topic']} Summary:\n{row['Summary']}"
+                                            for _, row in summary_df.iterrows()
+                                        ])
+                                        
+                                        # Create a prompt for the high-level summary
+                                        high_level_prompt = f"""Below are summaries from different clusters of results made by using Transformers NLP on set of results from projects. This is coming from the CGIAR reporting system. 
+Please create a comprehensive high-level summary that synthesizes the clusters so that both the main themes and findings across all clusters are covered but in an organized way. It is okay if the summary is long:
+
+{all_summaries_text}"""
+                                        
+                                        # Generate the high-level summary
+                                        high_level_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
+                                        high_level_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                                        high_level_chat_prompt = ChatPromptTemplate.from_messages([high_level_system_message, high_level_human_message])
+                                        high_level_chain = LLMChain(llm=llm, prompt=high_level_chat_prompt)
+                                        high_level_summary = high_level_chain.run(user_prompt=high_level_prompt).strip()
+                                        st.session_state['high_level_summary'] = high_level_summary
+
+                                        # Add references to high-level summary if enabled
                                         if enable_references and reference_id_column:
-                                            with st.spinner(f"Adding references to cluster {topic_val} summary..."):
-                                                summary_with_refs = add_references_to_summary(
-                                                    summary_local,
-                                                    cluster_df,
+                                            with st.spinner("Adding references to high-level summary..."):
+                                                enhanced_summary = add_references_to_summary(
+                                                    high_level_summary,
+                                                    df_scope,
                                                     reference_id_column,
                                                     url_column if add_hyperlinks else None,
                                                     llm
                                                 )
-                                            summaries.append({
-                                                'Topic': topic_val,
-                                                'Summary': summary_local,
-                                                'Enhanced_Summary': summary_with_refs
-                                            })
-                                        else:
-                                            summaries.append({
-                                                'Topic': topic_val,
-                                                'Summary': summary_local
-                                            })
-
-                                    if summaries:
-                                        summary_df = pd.DataFrame(summaries)
-                                        # Store the summaries DataFrame in session state
-                                        st.session_state['summary_df'] = summary_df
-                                        # Store additional summary info in session state
-                                        st.session_state['has_references'] = enable_references
-                                        st.session_state['reference_id_column'] = reference_id_column
-                                        st.session_state['url_column'] = url_column if add_hyperlinks else None
-                                        
-                                        # Now generate high-level summary from the cluster summaries
-                                        with st.spinner("Generating high-level summary from cluster summaries..."):
-                                            # Combine all summaries into one text
-                                            all_summaries_text = "\n\n".join([
-                                                f"Cluster {row['Topic']} Summary:\n{row['Summary']}"
-                                                for _, row in summary_df.iterrows()
-                                            ])
-                                            
-                                            # Create a prompt for the high-level summary
-                                            high_level_prompt = f"""Below are summaries from different clusters of results made by using Transformers NLP on set of results from projects. This is coming from the CGIAR reporting system. 
-Please create a comprehensive high-level summary that synthesizes the clusters so that both the main themes and findings across all clusters are covered but in an organized way. It is okay if the summary is long:
-
-{all_summaries_text}"""
-                                            
-                                            # Generate the high-level summary
-                                            high_level_system_message = SystemMessagePromptTemplate.from_template(st.session_state['system_prompt'])
-                                            high_level_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
-                                            high_level_chat_prompt = ChatPromptTemplate.from_messages([high_level_system_message, high_level_human_message])
-                                            high_level_chain = LLMChain(llm=llm, prompt=high_level_chat_prompt)
-                                            high_level_summary = high_level_chain.run(user_prompt=high_level_prompt).strip()
-                                            st.session_state['high_level_summary'] = high_level_summary
-
-                                            # Add references to high-level summary if enabled
-                                            if enable_references and reference_id_column:
-                                                with st.spinner("Adding references to high-level summary..."):
-                                                    enhanced_summary = add_references_to_summary(
-                                                        high_level_summary,
-                                                        df_scope,
-                                                        reference_id_column,
-                                                        url_column if add_hyperlinks else None,
-                                                        llm
-                                                    )
-                                                st.session_state['enhanced_summary'] = enhanced_summary
-                                                st.write("### High-Level Summary (with references):")
-                                                st.markdown(enhanced_summary, unsafe_allow_html=True)
-                                                with st.expander("View original summary (without references)"):
-                                                    st.write(high_level_summary)
-                                            else:
-                                                st.write("### High-Level Summary:")
+                                            st.session_state['enhanced_summary'] = enhanced_summary
+                                            st.write("### High-Level Summary (with references):")
+                                            st.markdown(enhanced_summary, unsafe_allow_html=True)
+                                            with st.expander("View original summary (without references)"):
                                                 st.write(high_level_summary)
-
-                                        # Display cluster summaries
-                                        st.write("### Cluster Summaries:")
-                                        if enable_references and 'Enhanced_Summary' in summary_df.columns:
-                                            for idx, row in summary_df.iterrows():
-                                                st.write(f"**Topic {row['Topic']}**")
-                                                st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
-                                                st.write("---")
-                                            with st.expander("View original summaries in table format"):
-                                                st.dataframe(summary_df[['Topic', 'Summary']])
                                         else:
-                                            st.write("### Summaries per Cluster:")
-                                            st.dataframe(summary_df)
+                                            st.write("### High-Level Summary:")
+                                            st.write(high_level_summary)
 
-                                        # Download
-                                        if 'Enhanced_Summary' in summary_df.columns:
-                                            dl_df = summary_df[['Topic', 'Summary']]
-                                        else:
-                                            dl_df = summary_df
-                                        csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
-                                        b64 = base64.b64encode(csv_bytes).decode()
-                                        href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
-                                        st.markdown(href, unsafe_allow_html=True)
+                                    # Display cluster summaries
+                                    st.write("### Cluster Summaries:")
+                                    if enable_references and 'Enhanced_Summary' in summary_df.columns:
+                                        for idx, row in summary_df.iterrows():
+                                            st.write(f"**Topic {row['Topic']}**")
+                                            st.markdown(row['Enhanced_Summary'], unsafe_allow_html=True)
+                                            st.write("---")
+                                        with st.expander("View original summaries in table format"):
+                                            st.dataframe(summary_df[['Topic', 'Summary']])
+                                    else:
+                                        st.write("### Summaries per Cluster:")
+                                        st.dataframe(summary_df)
+
+                                    # Download
+                                    if 'Enhanced_Summary' in summary_df.columns:
+                                        dl_df = summary_df[['Topic', 'Summary']]
+                                    else:
+                                        dl_df = summary_df
+                                    csv_bytes = dl_df.to_csv(index=False).encode('utf-8')
+                                    b64 = base64.b64encode(csv_bytes).decode()
+                                    href = f'<a href="data:file/csv;base64,{b64}" download="summaries.csv">Download Summaries CSV</a>'
+                                    st.markdown(href, unsafe_allow_html=True)
     else:
         st.warning("No data available for summarization.")
 
