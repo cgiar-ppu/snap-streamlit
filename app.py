@@ -2450,7 +2450,7 @@ else:  # Simple view
                         clustered_docs = len(topics) - noise_docs
                         
                         st.write(f"Found {num_clusters} distinct clusters")
-                        st.write(f"Documents successfully clustered: {clustered_docs}")
+                        #st.write(f"Documents successfully clustered: {clustered_docs}")
                         #if noise_docs > 0:
                         #    st.write(f"Documents not fitting in any cluster: {noise_docs}")
                         
@@ -2664,11 +2664,11 @@ Here are the overviews to synthesize:
                                 
                                 # Display summaries
                                 st.write("### High-Level Summary:")
-                                st.markdown(high_level_summary, unsafe_allow_html=True)
-                                
+                                with st.expander("High-Level Summary", expanded=True):
+                                    st.markdown(high_level_summary, unsafe_allow_html=True)
+
                                 st.write("### Cluster Summaries:")
                                 for idx, row in summary_df.iterrows():
                                     cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
-                                    st.write(f"**Topic {row['Topic']} - {cluster_name}**")
-                                    st.markdown(row.get('Enhanced_Summary', row['Summary']), unsafe_allow_html=True)
-                                    st.write("---")
+                                    with st.expander(f"Topic {row['Topic']} - {cluster_name}", expanded=False):
+                                        st.markdown(row.get('Enhanced_Summary', row['Summary']), unsafe_allow_html=True)
