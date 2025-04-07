@@ -7,7 +7,7 @@ st.set_page_config(page_title="SNAP", layout="wide")
 
 # Add warning filters
 import warnings
-# More specific warning filter for torch.classes
+# More specific warning filters for torch.classes
 warnings.filterwarnings('ignore', message='.*torch.classes.*__path__._path.*')
 warnings.filterwarnings('ignore', message='.*torch.classes.*registered via torch::class_.*')
 
@@ -46,7 +46,59 @@ from transformers import GPT2TokenizerFast
 
 # Initialize OpenAI client and tokenizer
 client = OpenAI()
-tokenizer = GPT2TokenizerFast.from_pretrained("Xenova/gpt-4o")
+
+###############################################################################
+# Helper: Attempt to get this file's directory or fallback to current working dir
+###############################################################################
+def get_base_dir():
+    try:
+        base_dir = os.path.dirname(__file__)
+        if not base_dir:
+            return os.getcwd()
+        return base_dir
+    except NameError:
+        # In case __file__ is not defined (some environments)
+        return os.getcwd()
+
+BASE_DIR = get_base_dir()
+
+# Function to get or create model directory
+def get_model_dir():
+    base_dir = get_base_dir()
+    model_dir = os.path.join(base_dir, 'models')
+    os.makedirs(model_dir, exist_ok=True)
+    return model_dir
+
+# Function to load tokenizer from local storage or download
+def load_tokenizer():
+    model_dir = get_model_dir()
+    tokenizer_dir = os.path.join(model_dir, 'tokenizer')
+    os.makedirs(tokenizer_dir, exist_ok=True)
+    
+    try:
+        # Try to load from local directory first
+        tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_dir)
+        #st.success("Loaded tokenizer from local storage")
+    except Exception as e:
+        #st.warning("Downloading tokenizer (one-time operation)...")
+        try:
+            # Download and save to local directory
+            tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")  # Use standard GPT2 tokenizer
+            tokenizer.save_pretrained(tokenizer_dir)
+            #st.success("Downloaded and saved tokenizer")
+        except Exception as download_e:
+            #st.error(f"Error downloading tokenizer: {str(download_e)}")
+            raise
+    
+    return tokenizer
+
+# Load tokenizer
+try:
+    tokenizer = load_tokenizer()
+except Exception as e:
+    #st.error("Failed to load tokenizer. Some functionality may be limited.")
+    tokenizer = None
+
 MAX_CONTEXT_WINDOW = 128000  # GPT-4o context window size
 
 # Initialize chat history in session state if not exists
@@ -544,7 +596,27 @@ else:
 ###############################################################################
 @st.cache_resource
 def get_embedding_model():
-    return SentenceTransformer('all-MiniLM-L6-v2').to(device)
+    model_dir = get_model_dir()
+    st_model_dir = os.path.join(model_dir, 'sentence_transformer')
+    os.makedirs(st_model_dir, exist_ok=True)
+    
+    model_name = 'all-MiniLM-L6-v2'
+    try:
+        # Try to load from local directory first
+        model = SentenceTransformer(st_model_dir)
+        #st.success("Loaded sentence transformer from local storage")
+    except Exception as e:
+        #st.warning("Downloading sentence transformer model (one-time operation)...")
+        try:
+            # Download and save to local directory
+            model = SentenceTransformer(model_name)
+            model.save(st_model_dir)
+            #st.success("Downloaded and saved sentence transformer model")
+        except Exception as download_e:
+            st.error(f"Error downloading sentence transformer model: {str(download_e)}")
+            raise
+    
+    return model.to(device)
 
 def generate_embeddings(texts, model):
     with st.spinner('Calculating embeddings...'):
