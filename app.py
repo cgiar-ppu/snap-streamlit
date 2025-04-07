@@ -2322,3 +2322,302 @@ Here are the overviews to synthesize:
 
 else:  # Simple view
     st.header("Automatic")
+    
+    # Initialize session state for automatic view
+    if 'df' not in st.session_state:
+        default_dataset_path = os.path.join(BASE_DIR, 'input', 'export_data_table_results_20251203_101413CET.xlsx')
+        df = load_default_dataset(default_dataset_path)
+        if df is not None:
+            st.session_state['df'] = df.copy()
+            st.session_state['using_default_dataset'] = True
+            st.session_state['filtered_df'] = df.copy()
+            
+            # Set default text columns if not already set
+            if 'text_columns' not in st.session_state or not st.session_state['text_columns']:
+                default_text_cols = []
+                if 'Title' in df.columns and 'Description' in df.columns:
+                    default_text_cols = ['Title', 'Description']
+                st.session_state['text_columns'] = default_text_cols
+
+    # Single search bar for automatic processing
+    st.write("Enter your query to automatically search, cluster, and summarize the results:")
+    query = st.text_input("Search query:")
+    
+    if st.button("Process"):
+        if query.strip():
+            # Step 1: Semantic Search
+            st.write("### Step 1: Semantic Search")
+            with st.spinner("Performing Semantic Search..."):
+                text_columns = st.session_state.get('text_columns', [])
+                if text_columns:
+                    df_full = st.session_state['df']
+                    embeddings, _ = load_or_compute_embeddings(
+                        df_full,
+                        st.session_state.get('using_default_dataset', False),
+                        st.session_state.get('uploaded_file_name'),
+                        text_columns
+                    )
+                    
+                    if embeddings is not None:
+                        model = get_embedding_model()
+                        df_filtered = st.session_state['filtered_df'].fillna("")
+                        search_texts = df_filtered[text_columns].agg(' '.join, axis=1).tolist()
+                        
+                        subset_indices = df_filtered.index
+                        subset_embeddings = embeddings[subset_indices]
+                        
+                        query_embedding = model.encode([query], device=device)
+                        similarities = cosine_similarity(query_embedding, subset_embeddings)[0]
+                        
+                        similarity_threshold = 0.35  # Default threshold
+                        above_threshold_indices = np.where(similarities > similarity_threshold)[0]
+                        
+                        if len(above_threshold_indices) > 0:
+                            selected_indices = subset_indices[above_threshold_indices]
+                            results = df_filtered.loc[selected_indices].copy()
+                            results['similarity_score'] = similarities[above_threshold_indices]
+                            results.sort_values(by='similarity_score', ascending=False, inplace=True)
+                            st.session_state['search_results'] = results.copy()
+                            st.write(f"Found {len(results)} relevant documents")
+                        else:
+                            st.warning("No results found above the similarity threshold.")
+                            st.stop()
+                
+            # Step 2: Clustering
+            if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+                st.write("### Step 2: Clustering")
+                with st.spinner("Performing clustering..."):
+                    df_to_cluster = st.session_state['search_results'].copy()
+                    dfc = df_to_cluster.copy().fillna("")
+                    dfc['text'] = dfc[text_columns].astype(str).agg(' '.join, axis=1)
+                    
+                    # Filter embeddings to those rows
+                    selected_indices = dfc.index
+                    embeddings_clustering = embeddings[selected_indices]
+                    
+                    # Basic cleaning
+                    stop_words = set(stopwords.words('english'))
+                    texts_cleaned = []
+                    for text in dfc['text'].tolist():
+                        try:
+                            word_tokens = word_tokenize(text)
+                            filtered_text = ' '.join([w for w in word_tokens if w.lower() not in stop_words])
+                            texts_cleaned.append(filtered_text)
+                        except Exception as e:
+                            texts_cleaned.append(text)
+                    
+                    min_cluster_size = 5  # Default value
+                    
+                    try:
+                        # Convert embeddings to CPU numpy if needed
+                        if torch.is_tensor(embeddings_clustering):
+                            embeddings_for_clustering = embeddings_clustering.cpu().numpy()
+                        else:
+                            embeddings_for_clustering = embeddings_clustering
+                        
+                        # Build the HDBSCAN model
+                        hdbscan_model = HDBSCAN(
+                            min_cluster_size=min_cluster_size, 
+                            metric='euclidean', 
+                            cluster_selection_method='eom'
+                        )
+                        
+                        # Build the BERTopic model
+                        topic_model = BERTopic(
+                            embedding_model=get_embedding_model(),
+                            hdbscan_model=hdbscan_model
+                        )
+                        
+                        # Fit the model and get topics
+                        topics, probs = topic_model.fit_transform(
+                            texts_cleaned, 
+                            embeddings=embeddings_for_clustering
+                        )
+                        
+                        # Store results
+                        dfc['Topic'] = topics
+                        st.session_state['topic_model'] = topic_model
+                        st.session_state['clustered_data'] = dfc.copy()
+                        st.session_state['clustering_completed'] = True
+                        
+                        # Generate visualizations
+                        try:
+                            st.session_state['intertopic_distance_fig'] = topic_model.visualize_topics()
+                        except Exception:
+                            st.session_state['intertopic_distance_fig'] = None
+                        
+                        try:
+                            st.session_state['topic_document_fig'] = topic_model.visualize_documents(
+                                texts_cleaned, 
+                                embeddings=embeddings_for_clustering
+                            )
+                        except Exception:
+                            st.session_state['topic_document_fig'] = None
+                        
+                        try:
+                            hierarchy = topic_model.hierarchical_topics(texts_cleaned)
+                            st.session_state['hierarchy'] = hierarchy if hierarchy is not None else pd.DataFrame()
+                            st.session_state['hierarchy_fig'] = topic_model.visualize_hierarchy()
+                        except Exception:
+                            st.session_state['hierarchy'] = pd.DataFrame()
+                            st.session_state['hierarchy_fig'] = None
+                            
+                    except Exception as e:
+                        st.error(f"An error occurred during clustering: {str(e)}")
+                        st.stop()
+                
+                # Step 3: Summarization
+                if st.session_state.get('clustering_completed', False):
+                    st.write("### Step 3: Summarization")
+                    
+                    # Initialize OpenAI client
+                    openai_api_key = os.environ.get('OPENAI_API_KEY')
+                    if not openai_api_key:
+                        st.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
+                        st.stop()
+                    
+                    llm = ChatOpenAI(
+                        api_key=openai_api_key, 
+                        model_name='gpt-4o-mini',
+                        temperature=0.7,
+                        max_tokens=1000
+                    )
+                    
+                    df_scope = st.session_state['clustered_data']
+                    unique_selected_topics = df_scope['Topic'].unique()
+                    
+                    # Process summaries in parallel
+                    with st.spinner("Generating summaries..."):
+                        local_system_message = SystemMessagePromptTemplate.from_template("""You are an expert summarizer skilled in creating concise and relevant summaries.
+You will be given text and an objective context. Please produce a clear, cohesive,
+and thematically relevant summary. 
+Focus on key points, insights, or patterns that emerge from the text.""")
+                        local_human_message = HumanMessagePromptTemplate.from_template("{user_prompt}")
+                        local_chat_prompt = ChatPromptTemplate.from_messages([local_system_message, local_human_message])
+                        
+                        # Find URL column if it exists
+                        url_column = next((col for col in df_scope.columns if 'url' in col.lower() or 'link' in col.lower() or 'pdf' in col.lower()), None)
+                        
+                        summaries = process_summaries_in_parallel(
+                            df_scope=df_scope,
+                            unique_selected_topics=unique_selected_topics,
+                            llm=llm,
+                            chat_prompt=local_chat_prompt,
+                            enable_references=True,
+                            reference_id_column=df_scope.columns[0],
+                            url_column=url_column,  # Add URL column for clickable links
+                            max_workers=min(16, len(unique_selected_topics))
+                        )
+                        
+                        if summaries:
+                            summary_df = pd.DataFrame(summaries)
+                            st.session_state['summary_df'] = summary_df
+                            
+                            # Display updated cluster overview
+                            if 'Cluster_Name' in summary_df.columns:
+                                st.write("### Updated Topic Overview:")
+                                cluster_info = []
+                                for t in unique_selected_topics:
+                                    cluster_docs = df_scope[df_scope['Topic'] == t]
+                                    count = len(cluster_docs)
+                                    top_words = topic_model.get_topic(t)
+                                    top_keywords = ", ".join([w[0] for w in top_words[:5]]) if top_words else "N/A"
+                                    cluster_name = summary_df[summary_df['Topic'] == t]['Cluster_Name'].iloc[0]
+                                    cluster_info.append((t, cluster_name, count, top_keywords))
+                                
+                                cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Cluster_Name", "Count", "Top Keywords"])
+                                st.dataframe(
+                                    cluster_df,
+                                    column_config={
+                                        "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                                        "Cluster_Name": st.column_config.TextColumn("Cluster Name", help="AI-generated name describing the cluster theme"),
+                                        "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                                        "Top Keywords": st.column_config.TextColumn(
+                                            "Top Keywords",
+                                            help="Top 5 keywords that characterize this topic"
+                                        )
+                                    },
+                                    hide_index=True
+                                )
+                            
+                            # Generate and display high-level summary
+                            with st.spinner("Generating high-level summary..."):
+                                formatted_summaries = []
+                                summary_batches = []
+                                current_batch = []
+                                current_batch_tokens = 0
+                                MAX_SAFE_TOKENS = int(MAX_CONTEXT_WINDOW * 0.75)
+                                
+                                for _, row in summary_df.iterrows():
+                                    summary_text = row.get('Enhanced_Summary', row['Summary'])
+                                    formatted_summary = f"### Cluster {row['Topic']} Summary:\n\n{summary_text}"
+                                    summary_tokens = len(tokenizer(formatted_summary)["input_ids"])
+                                    
+                                    if current_batch_tokens + summary_tokens > MAX_SAFE_TOKENS:
+                                        if current_batch:
+                                            summary_batches.append(current_batch)
+                                            current_batch = []
+                                            current_batch_tokens = 0
+                                    
+                                    current_batch.append(formatted_summary)
+                                    current_batch_tokens += summary_tokens
+                                
+                                if current_batch:
+                                    summary_batches.append(current_batch)
+                                
+                                batch_overviews = []
+                                for i, batch in enumerate(summary_batches, 1):
+                                    batch_text = "\n\n".join(batch)
+                                    batch_prompt = f"""Below are summaries from a subset of clusters from results made using Transformers NLP on a set of results from the CGIAR reporting system. Each summary contains references to source documents in the form of hyperlinked IDs like [ID] or <a href="...">ID</a>.
+
+Please create a comprehensive overview that synthesizes these clusters so that both the main themes and findings are covered in an organized way. IMPORTANT: 
+1. Preserve all hyperlinked references exactly as they appear in the input summaries
+2. Maintain the HTML anchor tags (<a href="...">) intact when using information from the summaries
+3. Keep the markdown formatting for better readability
+4. Note that this is part {i} of {len(summary_batches)} parts, so focus on the themes present in these specific clusters
+
+Here are the cluster summaries to synthesize:
+
+{batch_text}"""
+                                    
+                                    high_level_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
+                                    batch_overview = high_level_chain.run(user_prompt=batch_prompt).strip()
+                                    batch_overviews.append(batch_overview)
+                                
+                                combined_overviews = "\n\n### Part ".join([f"{i+1}:\n\n{overview}" for i, overview in enumerate(batch_overviews)])
+                                final_prompt = f"""Below are {len(batch_overviews)} overview summaries, each covering different clusters of research results. Each part maintains its original references to source documents.
+
+Please create a final comprehensive synthesis that:
+1. Integrates the key themes and findings from all parts
+2. Preserves all hyperlinked references exactly as they appear
+3. Maintains the HTML anchor tags (<a href="...">) intact
+4. Keeps the markdown formatting for better readability
+5. Creates a coherent narrative across all parts
+6. Highlights any themes that span multiple parts
+
+Here are the overviews to synthesize:
+
+### Part 1:
+
+{combined_overviews}"""
+                                
+                                final_prompt_tokens = len(tokenizer(final_prompt)["input_ids"])
+                                if final_prompt_tokens > MAX_SAFE_TOKENS:
+                                    high_level_summary = "# Overall Summary\n\n" + "\n\n".join([f"## Batch {i+1}\n\n{overview}" for i, overview in enumerate(batch_overviews)])
+                                else:
+                                    high_level_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
+                                    high_level_summary = high_level_chain.run(user_prompt=final_prompt).strip()
+                                
+                                st.session_state['high_level_summary'] = high_level_summary
+                                st.session_state['enhanced_summary'] = high_level_summary
+                                
+                                # Display summaries
+                                st.write("### High-Level Summary:")
+                                st.markdown(high_level_summary, unsafe_allow_html=True)
+                                
+                                st.write("### Cluster Summaries:")
+                                for idx, row in summary_df.iterrows():
+                                    cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
+                                    st.write(f"**Topic {row['Topic']} - {cluster_name}**")
+                                    st.markdown(row.get('Enhanced_Summary', row['Summary']), unsafe_allow_html=True)
+                                    st.write("---")
