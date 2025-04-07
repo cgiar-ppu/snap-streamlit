@@ -653,6 +653,9 @@ if st.session_state.view == "Power User":
             # Initialize filtered_df with full dataset by default
             if 'filtered_df' not in st.session_state or st.session_state['filtered_df'].empty:
                 st.session_state['filtered_df'] = df.copy()
+            
+            # Initialize filter_state if not exists
+            if 'filter_state' not in st.session_state:
                 st.session_state['filter_state'] = {
                     'applied': False,
                     'filters': {}
@@ -2340,10 +2343,10 @@ else:  # Simple view
                 st.session_state['text_columns'] = default_text_cols
 
     # Single search bar for automatic processing
-    st.write("Enter your query to automatically search, cluster, and summarize the results:")
-    query = st.text_input("Search query:")
+    #st.write("Enter your query to automatically search, cluster, and summarize the results:")
+    query = st.text_input("Write your query here:")
     
-    if st.button("Process"):
+    if st.button("SNAP!"):
         if query.strip():
             # Step 1: Semantic Search
             st.write("### Step 1: Semantic Search")
@@ -2439,6 +2442,43 @@ else:  # Simple view
                         st.session_state['topic_model'] = topic_model
                         st.session_state['clustered_data'] = dfc.copy()
                         st.session_state['clustering_completed'] = True
+
+                        # Display clustering results summary
+                        unique_topics = sorted(list(set(topics)))
+                        num_clusters = len([t for t in unique_topics if t != -1])  # Exclude noise cluster (-1)
+                        noise_docs = len([t for t in topics if t == -1])
+                        clustered_docs = len(topics) - noise_docs
+                        
+                        st.write(f"Found {num_clusters} distinct clusters")
+                        st.write(f"Documents successfully clustered: {clustered_docs}")
+                        #if noise_docs > 0:
+                        #    st.write(f"Documents not fitting in any cluster: {noise_docs}")
+                        
+                        # Show quick cluster overview
+                        cluster_info = []
+                        for t in unique_topics:
+                            if t != -1:  # Skip noise cluster in the overview
+                                cluster_docs = dfc[dfc['Topic'] == t]
+                                count = len(cluster_docs)
+                                top_words = topic_model.get_topic(t)
+                                top_keywords = ", ".join([w[0] for w in top_words[:5]]) if top_words else "N/A"
+                                cluster_info.append((t, count, top_keywords))
+                        
+                        if cluster_info:
+                            st.write("### Quick Cluster Overview:")
+                            cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+                            st.dataframe(
+                                cluster_df,
+                                column_config={
+                                    "Topic": st.column_config.NumberColumn("Topic", help="Topic ID"),
+                                    "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                                    "Top Keywords": st.column_config.TextColumn(
+                                        "Top Keywords",
+                                        help="Top 5 keywords that characterize this topic"
+                                    )
+                                },
+                                hide_index=True
+                            )
                         
                         # Generate visualizations
                         try:
@@ -2565,8 +2605,10 @@ Focus on key points, insights, or patterns that emerge from the text.""")
                                 if current_batch:
                                     summary_batches.append(current_batch)
                                 
+                                # Process each batch separately first
                                 batch_overviews = []
                                 for i, batch in enumerate(summary_batches, 1):
+                                    st.write(f"Processing summary batch {i} of {len(summary_batches)}...")
                                     batch_text = "\n\n".join(batch)
                                     batch_prompt = f"""Below are summaries from a subset of clusters from results made using Transformers NLP on a set of results from the CGIAR reporting system. Each summary contains references to source documents in the form of hyperlinked IDs like [ID] or <a href="...">ID</a>.
 
@@ -2574,7 +2616,9 @@ Please create a comprehensive overview that synthesizes these clusters so that b
 1. Preserve all hyperlinked references exactly as they appear in the input summaries
 2. Maintain the HTML anchor tags (<a href="...">) intact when using information from the summaries
 3. Keep the markdown formatting for better readability
-4. Note that this is part {i} of {len(summary_batches)} parts, so focus on the themes present in these specific clusters
+4. Create clear sections with headings for different themes
+5. Use bullet points or numbered lists where appropriate
+6. Focus on synthesizing the main themes and findings
 
 Here are the cluster summaries to synthesize:
 
@@ -2584,29 +2628,36 @@ Here are the cluster summaries to synthesize:
                                     batch_overview = high_level_chain.run(user_prompt=batch_prompt).strip()
                                     batch_overviews.append(batch_overview)
                                 
-                                combined_overviews = "\n\n### Part ".join([f"{i+1}:\n\n{overview}" for i, overview in enumerate(batch_overviews)])
-                                final_prompt = f"""Below are {len(batch_overviews)} overview summaries, each covering different clusters of research results. Each part maintains its original references to source documents.
+                                # Now create the final synthesis
+                                if len(batch_overviews) > 1:
+                                    st.write("Generating final synthesis...")
+                                    combined_overviews = "\n\n# Part ".join([f"{i+1}\n\n{overview}" for i, overview in enumerate(batch_overviews)])
+                                    final_prompt = f"""Below are multiple overview summaries, each covering different aspects of CGIAR research results. Each part maintains its original references to source documents.
 
 Please create a final comprehensive synthesis that:
-1. Integrates the key themes and findings from all parts
+1. Integrates the key themes and findings from all parts into a cohesive narrative
 2. Preserves all hyperlinked references exactly as they appear
 3. Maintains the HTML anchor tags (<a href="...">) intact
-4. Keeps the markdown formatting for better readability
-5. Creates a coherent narrative across all parts
-6. Highlights any themes that span multiple parts
+4. Uses clear section headings and structured formatting
+5. Highlights cross-cutting themes and relationships between different aspects
+6. Provides a clear introduction and conclusion
 
 Here are the overviews to synthesize:
 
-### Part 1:
+# Part 1
 
 {combined_overviews}"""
-                                
-                                final_prompt_tokens = len(tokenizer(final_prompt)["input_ids"])
-                                if final_prompt_tokens > MAX_SAFE_TOKENS:
-                                    high_level_summary = "# Overall Summary\n\n" + "\n\n".join([f"## Batch {i+1}\n\n{overview}" for i, overview in enumerate(batch_overviews)])
+                                    
+                                    final_prompt_tokens = len(tokenizer(final_prompt)["input_ids"])
+                                    if final_prompt_tokens > MAX_SAFE_TOKENS:
+                                        # If too long, just combine with headers
+                                        high_level_summary = "# Comprehensive Overview\n\n" + "\n\n# Part ".join([f"{i+1}\n\n{overview}" for i, overview in enumerate(batch_overviews)])
+                                    else:
+                                        high_level_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
+                                        high_level_summary = high_level_chain.run(user_prompt=final_prompt).strip()
                                 else:
-                                    high_level_chain = LLMChain(llm=llm, prompt=local_chat_prompt)
-                                    high_level_summary = high_level_chain.run(user_prompt=final_prompt).strip()
+                                    # If only one batch, use its overview directly
+                                    high_level_summary = batch_overviews[0]
                                 
                                 st.session_state['high_level_summary'] = high_level_summary
                                 st.session_state['enhanced_summary'] = high_level_summary
