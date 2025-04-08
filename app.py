@@ -582,6 +582,8 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     return '\n\n'.join(enhanced_paragraphs)
 
 
+st.sidebar.image("static/SNAP_logo.png", width=350)
+
 ###############################################################################
 # Device / GPU Info
 ###############################################################################
@@ -700,10 +702,10 @@ def reset_filters():
     st.session_state['selected_additional_filters'] = {}
 
 # Selector de vista
-st.sidebar.radio("Select view", ["Automatic", "Power User"], key="view")
+st.sidebar.radio("Select view", ["Automatic Mode", "Power User Mode"], key="view")
 
-if st.session_state.view == "Power User":      
-    st.header("Power User view")     
+if st.session_state.view == "Power User Mode":      
+    st.header("Power User Mode")     
     ###############################################################################
     # Sidebar: Dataset Selection
     ###############################################################################
@@ -2396,7 +2398,7 @@ Here are the overviews to synthesize:
     ###############################################################################
 
 else:  # Simple view
-    st.header("Automatic")
+    st.header("Automatic Mode")
     
     # Initialize session state for automatic view
     if 'df' not in st.session_state:
@@ -2417,6 +2419,29 @@ else:  # Simple view
     # Single search bar for automatic processing
     #st.write("Enter your query to automatically search, cluster, and summarize the results:")
     query = st.text_input("Write your query here:")
+
+    st.markdown("##### About this tool")
+    with st.expander("Click to expand/collapse", expanded=True):
+        st.markdown("""
+        This tool draws on CGIAR quality assured results data from 2022-2024 to provide verifiable responses to user questions around the themes and areas CGIAR has/is working on.
+                    
+        **Tips:**
+        - **Craft a phrase** that describes your topic of interest (e.g., `"climate-smart agriculture"`, `"gender equality livestock"`).
+        - Avoid writing full questions — **this is not a chatbot**.
+        - Combine **related terms** for better results (e.g., `"irrigation water access smallholders"`).
+        - Focus on **concepts or themes** — not single words like `"climate"` or `"yield"` alone.
+        - Example good queries:
+            - `"climate adaptation smallholder farming"`
+            - `"digital agriculture innovations"`
+            - `"nutrition-sensitive value chains"`
+
+        **Example use case**:
+        You’re interested in CGIAR’s contributions to **poverty reduction through improved maize varieties in Africa**.  
+        A good search phrase would be:  
+        👉 `"poverty reduction maize Africa"`  
+        This will retrieve results related to improved crop varieties, livelihood outcomes, and region-specific interventions, even if the documents use different wording like *"enhanced maize genetics"*, *"smallholder income"*, or *"eastern Africa trials"*.
+        """)
+
     
     if st.button("SNAP!"):
         if query.strip():
