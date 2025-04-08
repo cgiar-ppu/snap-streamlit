@@ -129,10 +129,23 @@ def generate_raw_cluster_summary(
     llm: Any,
     chat_prompt: Any
 ) -> Dict[str, Any]:
-    """Generate a summary for a single cluster without reference enhancement."""
+    """Generate a summary for a single cluster without reference enhancement,
+       automatically trimming text if it exceeds a safe token limit."""
     cluster_text = " ".join(cluster_df['text'].tolist())
     if not cluster_text.strip():
         return None
+
+    # Define a safe limit (95% of max context window to leave room for prompts)
+    safe_limit = int(MAX_CONTEXT_WINDOW * 0.95)
+    
+    # Encode the text into tokens
+    encoded_text = tokenizer.encode(cluster_text, add_special_tokens=False)
+    
+    # If the text is too large, slice it
+    if len(encoded_text) > safe_limit:
+        #st.warning(f"Cluster {topic_val} text is too large ({len(encoded_text)} tokens). Trimming to {safe_limit} tokens.")
+        encoded_text = encoded_text[:safe_limit]
+        cluster_text = tokenizer.decode(encoded_text)
     
     user_prompt_local = f"**Text to summarize**: {cluster_text}"
     try:
@@ -2436,7 +2449,7 @@ else:  # Simple view
             - `"nutrition-sensitive value chains"`
 
         **Example use case**:
-        You’re interested in CGIAR’s contributions to **poverty reduction through improved maize varieties in Africa**.  
+        You're interested in CGIAR's contributions to **poverty reduction through improved maize varieties in Africa**.  
         A good search phrase would be:  
         👉 `"poverty reduction maize Africa"`  
         This will retrieve results related to improved crop varieties, livelihood outcomes, and region-specific interventions, even if the documents use different wording like *"enhanced maize genetics"*, *"smallholder income"*, or *"eastern Africa trials"*.
