@@ -2433,27 +2433,7 @@ else:  # Simple view
     #st.write("Enter your query to automatically search, cluster, and summarize the results:")
     query = st.text_input("Write your query here:")
 
-    st.markdown("##### About this tool")
-    with st.expander("Click to expand/collapse", expanded=True):
-        st.markdown("""
-        This tool draws on CGIAR quality assured results data from 2022-2024 to provide verifiable responses to user questions around the themes and areas CGIAR has/is working on.
-                    
-        **Tips:**
-        - **Craft a phrase** that describes your topic of interest (e.g., `"climate-smart agriculture"`, `"gender equality livestock"`).
-        - Avoid writing full questions — **this is not a chatbot**.
-        - Combine **related terms** for better results (e.g., `"irrigation water access smallholders"`).
-        - Focus on **concepts or themes** — not single words like `"climate"` or `"yield"` alone.
-        - Example good queries:
-            - `"climate adaptation smallholder farming"`
-            - `"digital agriculture innovations"`
-            - `"nutrition-sensitive value chains"`
-
-        **Example use case**:
-        You're interested in CGIAR's contributions to **poverty reduction through improved maize varieties in Africa**.  
-        A good search phrase would be:  
-        👉 `"poverty reduction maize Africa"`  
-        This will retrieve results related to improved crop varieties, livelihood outcomes, and region-specific interventions, even if the documents use different wording like *"enhanced maize genetics"*, *"smallholder income"*, or *"eastern Africa trials"*.
-        """)
+    
 
     
     if st.button("SNAP!"):
@@ -2575,20 +2555,20 @@ else:  # Simple view
                                 cluster_info.append((t, count, top_keywords))
                         
                         if cluster_info:
-                            st.write("### Quick Cluster Overview:")
+                            #st.write("### Quick Cluster Overview:")
                             cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
-                            st.dataframe(
-                                cluster_df,
-                                column_config={
-                                    "Topic": st.column_config.NumberColumn("Topic", help="Topic ID"),
-                                    "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
-                                    "Top Keywords": st.column_config.TextColumn(
-                                        "Top Keywords",
-                                        help="Top 5 keywords that characterize this topic"
-                                    )
-                                },
-                                hide_index=True
-                            )
+                        #     st.dataframe(
+                        #         cluster_df,
+                        #         column_config={
+                        #             "Topic": st.column_config.NumberColumn("Topic", help="Topic ID"),
+                        #             "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                        #             "Top Keywords": st.column_config.TextColumn(
+                        #                 "Top Keywords",
+                        #                 help="Top 5 keywords that characterize this topic"
+                        #             )
+                        #         },
+                        #         hide_index=True
+                        #     )
                         
                         # Generate visualizations
                         try:
@@ -2782,3 +2762,24 @@ Here are the overviews to synthesize:
                                     cluster_name = row.get('Cluster_Name', 'Unnamed Cluster')
                                     with st.expander(f"Topic {row['Topic']} - {cluster_name}", expanded=False):
                                         st.markdown(row.get('Enhanced_Summary', row['Summary']), unsafe_allow_html=True)
+    st.markdown("##### About this tool")
+    with st.expander("Click to expand/collapse", expanded=True):
+        st.markdown("""
+        This tool draws on CGIAR quality assured results data from 2022-2024 to provide verifiable responses to user questions around the themes and areas CGIAR has/is working on.
+                    
+        **Tips:**
+        - **Craft a phrase** that describes your topic of interest (e.g., `"climate-smart agriculture"`, `"gender equality livestock"`).
+        - Avoid writing full questions — **this is not a chatbot**.
+        - Combine **related terms** for better results (e.g., `"irrigation water access smallholders"`).
+        - Focus on **concepts or themes** — not single words like `"climate"` or `"yield"` alone.
+        - Example good queries:
+            - `"climate adaptation smallholder farming"`
+            - `"digital agriculture innovations"`
+            - `"nutrition-sensitive value chains"`
+
+        **Example use case**:
+        You're interested in CGIAR's contributions to **poverty reduction through improved maize varieties in Africa**.  
+        A good search phrase would be:  
+        👉 `"poverty reduction maize Africa"`  
+        This will retrieve results related to improved crop varieties, livelihood outcomes, and region-specific interventions, even if the documents use different wording like *"enhanced maize genetics"*, *"smallholder income"*, or *"eastern Africa trials"*.
+        """)
