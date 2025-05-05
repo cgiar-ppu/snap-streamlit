@@ -1,0 +1,1 @@
+This script enhances the base SNAP dataset by adding a new column to each row/result code, "HQ_country" which comes from the result_institution table from the Results Dashboard data schema.
