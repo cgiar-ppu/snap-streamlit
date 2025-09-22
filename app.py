@@ -44,10 +44,6 @@ from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, H
 from openai import OpenAI
 from transformers import GPT2TokenizerFast
 
-<<<<<<< HEAD
-# Initialize OpenAI client and tokenizer
-client = OpenAI()
-=======
 # Initialize OpenAI client conditionally (only when API key is available)
 client = None
 
@@ -61,7 +57,6 @@ def get_openai_client():
             # Return None if no API key is set - the app can still work for clustering
             return None
     return client
->>>>>>> 78da76b (Pushing the Slider change)
 
 ###############################################################################
 # Helper: Attempt to get this file's directory or fallback to current working dir
@@ -125,14 +120,11 @@ if 'chat_history' not in st.session_state:
 # Helper: Get chat response from OpenAI
 ###############################################################################
 def get_chat_response(messages):
-<<<<<<< HEAD
-=======
     client = get_openai_client()
     if client is None:
         st.error("OpenAI API key not configured. Please set your OPENAI_API_KEY environment variable.")
         return None
     
->>>>>>> 78da76b (Pushing the Slider change)
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -523,19 +515,13 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
                 
                 if line.strip().startswith('- ') or line.strip().startswith('* '):
                     # Process each bullet point
-<<<<<<< HEAD
-=======
                     newline = '\n'
                     source_list = newline.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])
                     
->>>>>>> 78da76b (Pushing the Slider change)
                     user_prompt = f"""
                     Text: {line.strip()}
 
                     Source texts:
-<<<<<<< HEAD
-                    {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
-=======
                     {source_list}"""
                     
                     system_prompt = f"""Given a piece of text, determine which of the provided source texts it most likely came from based on semantic similarity and content overlap.
@@ -544,7 +530,6 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
 
                     Source texts:
                     {source_list}
->>>>>>> 78da76b (Pushing the Slider change)
 
                     Which source ID(s) did this text most likely come from? Return only the ID(s) separated by commas, or "unknown".
                     """
@@ -591,21 +576,14 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
                 if not sentence.strip():
                     continue
 
-<<<<<<< HEAD
-=======
                 newline = '\n'
                 source_list = newline.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])
                 
->>>>>>> 78da76b (Pushing the Slider change)
                 user_prompt = f"""
                 Sentence: {sentence.strip()}
 
                 Source texts:
-<<<<<<< HEAD
-                {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
-=======
                 {source_list}
->>>>>>> 78da76b (Pushing the Slider change)
 
                 Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
                 """
@@ -646,8 +624,6 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     return '\n\n'.join(enhanced_paragraphs)
 
 
-<<<<<<< HEAD
-=======
 ###############################################################################
 # Topic Reduction Functions (Recursive Merge)
 ###############################################################################
@@ -761,7 +737,6 @@ def recursive_merge(copy_model, cleaned, target_topics, progress_callback=None):
 ###############################################################################
 # Main Application
 ###############################################################################
->>>>>>> 78da76b (Pushing the Slider change)
 st.sidebar.image("static/SNAP_logo.png", width=350)
 
 ###############################################################################
@@ -1477,8 +1452,6 @@ if st.session_state.view == "Power User Mode":
                 if run_clustering:
                     st.session_state.active_tab_index = tabs_titles.index("Clustering")
                     st.session_state['min_cluster_size'] = min_cluster_size_val
-<<<<<<< HEAD
-=======
                     
                     # Complete cleanup when starting new clustering (fresh start)
                     # Remove all previous topic models and reduction data
@@ -1498,7 +1471,6 @@ if st.session_state.view == "Power User Mode":
                     # Reset topic reduction state to defaults
                     st.session_state['topic_reduction_in_progress'] = False
                     st.session_state['topic_reduction_cancel'] = {'cancel': False}
->>>>>>> 78da76b (Pushing the Slider change)
 
             # Decide which DataFrame is used based on the selection
             if clustering_option == 'Semantic Search Results':
@@ -1528,10 +1500,7 @@ if st.session_state.view == "Power User Mode":
                     text_columns
                 )
 
-<<<<<<< HEAD
-=======
                 # Run clustering when button is pressed
->>>>>>> 78da76b (Pushing the Slider change)
                 if df_to_cluster is not None and embeddings is not None and not df_to_cluster.empty and run_clustering:
                     with st.spinner("Performing clustering..."):
                         # Clear any existing summary data when clustering is run
@@ -1630,11 +1599,8 @@ if st.session_state.view == "Power User Mode":
                                 # Store results if validation passes
                                 dfc['Topic'] = topics
                                 st.session_state['topic_model'] = topic_model
-<<<<<<< HEAD
-=======
                                 st.session_state['topics'] = topics
                                 st.session_state['probs'] = probs
->>>>>>> 78da76b (Pushing the Slider change)
                                 st.session_state['clustered_data'] = dfc.copy()
                                 st.session_state['clustering_texts_cleaned'] = texts_cleaned
                                 st.session_state['clustering_embeddings'] = embeddings_for_clustering
@@ -1683,8 +1649,6 @@ if st.session_state.view == "Power User Mode":
                             st.session_state.active_tab_index = tabs_titles.index("Clustering")
                             st.stop()
 
-<<<<<<< HEAD
-=======
                 # Display clustering results if they exist (outside run_clustering condition)
                 if st.session_state.get('clustering_completed', False):
                     # st.subheader("Topic Overview")
@@ -1718,6 +1682,11 @@ if st.session_state.view == "Power User Mode":
                         },
                         hide_index=True
                     )
+                    
+                    # Clustering Results and Visualizations
+                    st.subheader("Clustering Results")
+                    columns_to_display = [c for c in dfc.columns if c != 'text']
+                    st.dataframe(dfc[columns_to_display], hide_index=True)
 
                     # Topic Reduction (Recursive Merge) - moved above clustering results
                     st.subheader("Reduce Topics")
@@ -1828,7 +1797,7 @@ if st.session_state.view == "Power User Mode":
                                 
                                 # Validate that reduction is actually needed
                                 if target_topics >= current_num_topics:
-                                    st.error(f"Target topics ({target_topics}) must be less than current topics ({current_num_topics}) to perform reduction.")
+                                    st.error(f"Target topics ({target_topics}) must be less than current topics ({current_num_topics}). To perform reduction you should restore the original topics first.")
                                     st.stop()
                                 
                                 st.session_state['topic_reduction_in_progress'] = True
@@ -1927,11 +1896,6 @@ if st.session_state.view == "Power User Mode":
                                     st.rerun()
                             else:
                                 st.info("See the results below.")
-                    
-                    # Clustering Results and Visualizations
-                    st.subheader("Clustering Results")
-                    columns_to_display = [c for c in dfc.columns if c != 'text']
-                    st.dataframe(dfc[columns_to_display], hide_index=True)
 
                     # Display stored visualizations with error handling - Hierarchy first, then others
                     st.write("### Topic Hierarchy")
@@ -1954,12 +1918,12 @@ if st.session_state.view == "Power User Mode":
                             st.plotly_chart(st.session_state['topic_document_fig'])
                         except Exception:
                             st.info("Document visualization is not available for the current clustering results.")
+                
                 # Display results when clustering exists but run_clustering was not pressed (e.g., after topic reduction)
                 elif st.session_state.get('clustering_completed', False):
                     # Show the clustering results section even when run_clustering is False
                     # This ensures topic reduction results are displayed
                     
->>>>>>> 78da76b (Pushing the Slider change)
                     # Display clustering results if they exist
                     if st.session_state.get('clustering_completed', False):
                         st.subheader("Topic Overview")
@@ -1998,9 +1962,6 @@ if st.session_state.view == "Power User Mode":
                         columns_to_display = [c for c in dfc.columns if c != 'text']
                         st.dataframe(dfc[columns_to_display], hide_index=True)
 
-<<<<<<< HEAD
-                        # Display stored visualizations with error handling
-=======
                         # Display stored visualizations with error handling - Hierarchy first, then others
                         st.write("### Topic Hierarchy")
                         if st.session_state.get('hierarchy_fig') is not None:
@@ -2009,7 +1970,6 @@ if st.session_state.view == "Power User Mode":
                             except Exception:
                                 st.info("Topic hierarchy visualization is not available for the current clustering results.")
 
->>>>>>> 78da76b (Pushing the Slider change)
                         st.write("### Intertopic Distance Map")
                         if st.session_state.get('intertopic_distance_fig') is not None:
                             try:
@@ -2023,22 +1983,8 @@ if st.session_state.view == "Power User Mode":
                                 st.plotly_chart(st.session_state['topic_document_fig'])
                             except Exception:
                                 st.info("Document visualization is not available for the current clustering results.")
-<<<<<<< HEAD
-
-                        st.write("### Topic Hierarchy")
-                        if st.session_state.get('hierarchy_fig') is not None:
-                            try:
-                                st.plotly_chart(st.session_state['hierarchy_fig'])
-                            except Exception:
-                                st.info("Topic hierarchy visualization is not available for the current clustering results.")
-                if not (df_to_cluster is not None and embeddings is not None and not df_to_cluster.empty and run_clustering):
-                    pass
-        else:
-            st.warning("Please select or upload a dataset and filter as needed.")
-=======
                 else:
                     st.warning("Please select or upload a dataset and filter as needed.")
->>>>>>> 78da76b (Pushing the Slider change)
 
 
     ###############################################################################
