@@ -1669,25 +1669,6 @@ if st.session_state.view == "Power User Mode":
                         cluster_info.append((t, count, top_keywords))
                     cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
 
-                    st.write("### Topic Overview")
-                    st.dataframe(
-                        cluster_df,
-                        column_config={
-                            "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
-                            "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
-                            "Top Keywords": st.column_config.TextColumn(
-                                "Top Keywords",
-                                help="Top 5 keywords that characterize this topic"
-                            )
-                        },
-                        hide_index=True
-                    )
-                    
-                    # Clustering Results and Visualizations
-                    st.subheader("Clustering Results")
-                    columns_to_display = [c for c in dfc.columns if c != 'text']
-                    st.dataframe(dfc[columns_to_display], hide_index=True)
-
                     # Topic Reduction (Recursive Merge) - moved above clustering results
                     st.subheader("Reduce Topics")
                     
@@ -1897,6 +1878,20 @@ if st.session_state.view == "Power User Mode":
                             else:
                                 st.info("See the results below.")
 
+                    st.write("### Topic Overview")
+                    st.dataframe(
+                        cluster_df,
+                        column_config={
+                            "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                            "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                            "Top Keywords": st.column_config.TextColumn(
+                                "Top Keywords",
+                                help="Top 5 keywords that characterize this topic"
+                            )
+                        },
+                        hide_index=True
+                    )
+
                     # Display stored visualizations with error handling - Hierarchy first, then others
                     st.write("### Topic Hierarchy")
                     if st.session_state.get('hierarchy_fig') is not None:
@@ -1919,6 +1914,11 @@ if st.session_state.view == "Power User Mode":
                         except Exception:
                             st.info("Document visualization is not available for the current clustering results.")
                 
+                    # Clustering Results and Visualizations
+                        st.subheader("Clustering Results")
+                        columns_to_display = [c for c in dfc.columns if c != 'text']
+                        st.dataframe(dfc[columns_to_display], hide_index=True)
+                        
                 # Display results when clustering exists but run_clustering was not pressed (e.g., after topic reduction)
                 elif st.session_state.get('clustering_completed', False):
                     # Show the clustering results section even when run_clustering is False
@@ -1958,10 +1958,6 @@ if st.session_state.view == "Power User Mode":
                             hide_index=True
                         )
 
-                        st.subheader("Clustering Results")
-                        columns_to_display = [c for c in dfc.columns if c != 'text']
-                        st.dataframe(dfc[columns_to_display], hide_index=True)
-
                         # Display stored visualizations with error handling - Hierarchy first, then others
                         st.write("### Topic Hierarchy")
                         if st.session_state.get('hierarchy_fig') is not None:
@@ -1983,6 +1979,12 @@ if st.session_state.view == "Power User Mode":
                                 st.plotly_chart(st.session_state['topic_document_fig'])
                             except Exception:
                                 st.info("Document visualization is not available for the current clustering results.")
+
+                        # Clustering Results and Visualizations
+                        st.subheader("Clustering Results")
+                        columns_to_display = [c for c in dfc.columns if c != 'text']
+                        st.dataframe(dfc[columns_to_display], hide_index=True)
+                
                 else:
                     st.warning("Please select or upload a dataset and filter as needed.")
 
