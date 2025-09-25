@@ -1779,102 +1779,104 @@ if st.session_state.view == "Power User Mode":
                                 # Validate that reduction is actually needed
                                 if target_topics >= current_num_topics:
                                     st.error(f"Target topics ({target_topics}) must be less than current topics ({current_num_topics}). To perform reduction you should restore the original topics first.")
-                                    st.stop()
-                                
-                                st.session_state['topic_reduction_in_progress'] = True
-                                st.session_state['topic_reduction_cancel']['cancel'] = False
-
-                                if not st.session_state['original_model_backup']:
-                                    st.session_state['original_model_backup'] = {
-                                        'model': copy.deepcopy(st.session_state['topic_model']),
-                                        'data': st.session_state['clustered_data'].copy(),
-                                        'topics': st.session_state['topics'].copy(),
-                                        'probs': st.session_state['probs'].copy(),
-                                        'intertopic_fig': st.session_state.get('intertopic_distance_fig'),
-                                        'topic_doc_fig': st.session_state.get('topic_document_fig'),
-                                        'hierarchy_fig': st.session_state.get('hierarchy_fig')
-                                    }
-                                    st.session_state['original_topic_count'] = current_num_topics
-
-                                progress_container = st.container()
-                                status_container = st.container()
-
-                                with progress_container:
-                                    progress_bar = st.progress(0)
-                                    status_text = st.empty()
-
-                                def progress_callback(message):
-                                    status_text.text(message)
-
-                                try:
-                                    # Use current topic_model (more memory efficient than copying from backup)
-                                    copy_model = st.session_state['topic_model']
-                                    texts_cleaned = st.session_state['clustering_texts_cleaned']
-
-                                    status_text.text("Starting topic reduction...")
-                                    progress_bar.progress(10)
-
-                                    reduced_model = recursive_merge(
-                                        copy_model,
-                                        texts_cleaned,
-                                        target_topics,
-                                        progress_callback=progress_callback
-                                    )
-                                    
-                                    progress_bar.progress(50)
-                                    status_text.text("Updating topic assignments...")
-
-                                    df_reduced = st.session_state['clustered_data'].copy()
-                                    df_reduced['Topic'] = reduced_model.topics_
-
-                                    progress_bar.progress(70)
-                                    status_text.text("Regenerating visualizations...")
-
-                                    try:
-                                        intertopic_fig = reduced_model.visualize_topics()
-                                    except Exception:
-                                        intertopic_fig = None
-
-                                    try:
-                                        topic_doc_fig = reduced_model.visualize_documents(
-                                            texts_cleaned,
-                                            embeddings=st.session_state['clustering_embeddings']
-                                        )
-                                    except Exception:
-                                        topic_doc_fig = None
-
-                                    try:
-                                        hierarchy = reduced_model.hierarchical_topics(texts_cleaned)
-                                        hierarchy_fig = reduced_model.visualize_hierarchy()
-                                    except Exception:
-                                        hierarchy_fig = None
-
-                                    progress_bar.progress(90)
-                                    status_text.text("Finalizing changes...")
-
-                                    st.session_state['topic_model'] = reduced_model
-                                    st.session_state['clustered_data'] = df_reduced
-                                    st.session_state['topics'] = reduced_model.topics_
-                                    st.session_state['intertopic_distance_fig'] = intertopic_fig
-                                    st.session_state['topic_document_fig'] = topic_doc_fig
-                                    st.session_state['hierarchy_fig'] = hierarchy_fig
-                                    st.session_state['reduction_applied'] = True
-
-                                    progress_bar.progress(100)
-                                    status_text.text("Topic reduction completed!")
-                                    st.success(f"Successfully reduced topics from {current_num_topics} to {target_topics}!")
-                                    
-                                    # Update session state to ensure results are shown
-                                    st.session_state['clustering_completed'] = True
-
-                                except Exception as e:
-                                    st.error(f"Topic reduction failed: {e}")
-                                    status_text.text("Topic reduction failed.")
-                                    progress_bar.progress(0)
-                                finally:
+                                    # st.stop()
                                     st.session_state['topic_reduction_in_progress'] = False
-                                    # Trigger rerun to show updated results
-                                    st.rerun()
+                                
+                                else:    
+                                    st.session_state['topic_reduction_in_progress'] = True
+                                    st.session_state['topic_reduction_cancel']['cancel'] = False
+
+                                    if not st.session_state['original_model_backup']:
+                                        st.session_state['original_model_backup'] = {
+                                            'model': copy.deepcopy(st.session_state['topic_model']),
+                                            'data': st.session_state['clustered_data'].copy(),
+                                            'topics': st.session_state['topics'].copy(),
+                                            'probs': st.session_state['probs'].copy(),
+                                            'intertopic_fig': st.session_state.get('intertopic_distance_fig'),
+                                            'topic_doc_fig': st.session_state.get('topic_document_fig'),
+                                            'hierarchy_fig': st.session_state.get('hierarchy_fig')
+                                        }
+                                        st.session_state['original_topic_count'] = current_num_topics
+
+                                    progress_container = st.container()
+                                    status_container = st.container()
+
+                                    with progress_container:
+                                        progress_bar = st.progress(0)
+                                        status_text = st.empty()
+
+                                    def progress_callback(message):
+                                        status_text.text(message)
+
+                                    try:
+                                        # Use current topic_model (more memory efficient than copying from backup)
+                                        copy_model = st.session_state['topic_model']
+                                        texts_cleaned = st.session_state['clustering_texts_cleaned']
+
+                                        status_text.text("Starting topic reduction...")
+                                        progress_bar.progress(10)
+
+                                        reduced_model = recursive_merge(
+                                            copy_model,
+                                            texts_cleaned,
+                                            target_topics,
+                                            progress_callback=progress_callback
+                                        )
+                                        
+                                        progress_bar.progress(50)
+                                        status_text.text("Updating topic assignments...")
+
+                                        df_reduced = st.session_state['clustered_data'].copy()
+                                        df_reduced['Topic'] = reduced_model.topics_
+
+                                        progress_bar.progress(70)
+                                        status_text.text("Regenerating visualizations...")
+
+                                        try:
+                                            intertopic_fig = reduced_model.visualize_topics()
+                                        except Exception:
+                                            intertopic_fig = None
+
+                                        try:
+                                            topic_doc_fig = reduced_model.visualize_documents(
+                                                texts_cleaned,
+                                                embeddings=st.session_state['clustering_embeddings']
+                                            )
+                                        except Exception:
+                                            topic_doc_fig = None
+
+                                        try:
+                                            hierarchy = reduced_model.hierarchical_topics(texts_cleaned)
+                                            hierarchy_fig = reduced_model.visualize_hierarchy()
+                                        except Exception:
+                                            hierarchy_fig = None
+
+                                        progress_bar.progress(90)
+                                        status_text.text("Finalizing changes...")
+
+                                        st.session_state['topic_model'] = reduced_model
+                                        st.session_state['clustered_data'] = df_reduced
+                                        st.session_state['topics'] = reduced_model.topics_
+                                        st.session_state['intertopic_distance_fig'] = intertopic_fig
+                                        st.session_state['topic_document_fig'] = topic_doc_fig
+                                        st.session_state['hierarchy_fig'] = hierarchy_fig
+                                        st.session_state['reduction_applied'] = True
+
+                                        progress_bar.progress(100)
+                                        status_text.text("Topic reduction completed!")
+                                        st.success(f"Successfully reduced topics from {current_num_topics} to {target_topics}!")
+                                        
+                                        # Update session state to ensure results are shown
+                                        st.session_state['clustering_completed'] = True
+
+                                    except Exception as e:
+                                        st.error(f"Topic reduction failed: {e}")
+                                        status_text.text("Topic reduction failed.")
+                                        progress_bar.progress(0)
+                                    finally:
+                                        st.session_state['topic_reduction_in_progress'] = False
+                                        # Trigger rerun to show updated results
+                                        st.rerun()
                             else:
                                 st.info("See the results below.")
 
