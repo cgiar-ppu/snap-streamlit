@@ -44,8 +44,19 @@ from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, H
 from openai import OpenAI
 from transformers import GPT2TokenizerFast
 
-# Initialize OpenAI client and tokenizer
-client = OpenAI()
+# Initialize OpenAI client conditionally (only when API key is available)
+client = None
+
+def get_openai_client():
+    """Get OpenAI client, initializing it only when needed and if API key is available."""
+    global client
+    if client is None:
+        try:
+            client = OpenAI()
+        except Exception as e:
+            # Return None if no API key is set - the app can still work for clustering
+            return None
+    return client
 
 ###############################################################################
 # Helper: Attempt to get this file's directory or fallback to current working dir
@@ -109,6 +120,11 @@ if 'chat_history' not in st.session_state:
 # Helper: Get chat response from OpenAI
 ###############################################################################
 def get_chat_response(messages):
+    client = get_openai_client()
+    if client is None:
+        st.error("OpenAI API key not configured. Please set your OPENAI_API_KEY environment variable.")
+        return None
+    
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -499,11 +515,21 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
                 
                 if line.strip().startswith('- ') or line.strip().startswith('* '):
                     # Process each bullet point
+                    newline = '\n'
+                    source_list = newline.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])
+                    
                     user_prompt = f"""
                     Text: {line.strip()}
 
                     Source texts:
-                    {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
+                    {source_list}"""
+                    
+                    system_prompt = f"""Given a piece of text, determine which of the provided source texts it most likely came from based on semantic similarity and content overlap.
+
+                    Text to analyze: {text}
+
+                    Source texts:
+                    {source_list}
 
                     Which source ID(s) did this text most likely come from? Return only the ID(s) separated by commas, or "unknown".
                     """
@@ -550,11 +576,14 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
                 if not sentence.strip():
                     continue
 
+                newline = '\n'
+                source_list = newline.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])
+                
                 user_prompt = f"""
                 Sentence: {sentence.strip()}
 
                 Source texts:
-                {'\n'.join([f"ID: {ref_id}, Text: {text[:500]}..." for ref_id, text in zip(reference_ids, source_texts)])}
+                {source_list}
 
                 Which source ID(s) did this sentence most likely come from? Return only the ID(s) separated by commas, or "unknown".
                 """
@@ -595,6 +624,119 @@ def add_references_to_summary(summary, source_df, reference_column, url_column=N
     return '\n\n'.join(enhanced_paragraphs)
 
 
+###############################################################################
+# Topic Reduction Functions (Recursive Merge)
+###############################################################################
+import copy
+from collections import defaultdict, deque
+
+def build_tree(hier):
+    """Build hierarchical tree structure from BERTopic hierarchy."""
+    tree = {}
+    for _, row in hier.iterrows():
+        parent = int(row["Parent_ID"])
+        left = int(row["Child_Left_ID"])
+        right = int(row["Child_Right_ID"])
+        tree[parent] = (left, right)
+    return tree
+
+def compute_depths(tree, root_id, depth=0, depths=None):
+    """Compute depth of each node in the hierarchy tree."""
+    if depths is None:
+        depths = {}
+    depths[root_id] = depth
+    if root_id in tree:
+        left, right = tree[root_id]
+        compute_depths(tree, left, depth+1, depths)
+        compute_depths(tree, right, depth+1, depths)
+    return depths
+
+def find_root(hier):
+    """Find root node of the hierarchy."""
+    parents = set(hier["Parent_ID"].astype(int))
+    children = set(hier["Child_Left_ID"].astype(int)) | set(hier["Child_Right_ID"].astype(int))
+    roots = parents - children
+    if not roots:
+        raise ValueError("No root found.")
+    if len(roots) > 1:
+        print("Multiple roots found.")
+    return next(iter(roots))
+
+def total_topics(model):
+    """Count total number of topics (excluding outliers)."""
+    unique_topics = set(model.topics_)
+    unique_topics.discard(-1)
+    return len(unique_topics)
+
+def compute_leaf_pairs_by_level(tree, root_id):
+    """Compute pairs of leaf nodes organized by their depth level."""
+    level_pairs = defaultdict(list)
+    queue = deque([(root_id, 0)])  # (node, depth)
+    
+    while queue:
+        node, depth = queue.popleft()
+        if node in tree:
+            left, right = tree[node]
+            
+            if left not in tree and right not in tree:
+                level_pairs[depth].append([left, right])
+            
+            queue.append((left, depth + 1))
+            queue.append((right, depth + 1))
+    
+    return dict(level_pairs)
+
+def select_pairs_for_merge(level_pairs, num_pairs_needed):
+    """Select pairs for merging, prioritizing deepest level first."""
+    selected = []
+    # Sort levels deepest-first
+    for level in sorted(level_pairs.keys(), reverse=True):
+        for pair in level_pairs[level]:
+            if len(selected) < num_pairs_needed:
+                selected.append(pair)
+            else:
+                break
+        if len(selected) >= num_pairs_needed:
+            break
+    return selected
+
+def recursive_merge(copy_model, cleaned, target_topics, progress_callback=None):
+    """Recursively merge topics until target number is reached."""
+    total_t = total_topics(copy_model)
+    step = 0
+    
+    while total_t > target_topics:
+        step += 1
+        if progress_callback:
+            progress_callback(f"Step {step}: Reducing from {total_t} topics...")
+            
+        hier = copy_model.hierarchical_topics(cleaned)
+        tree = build_tree(hier)
+        root_id = find_root(hier)
+
+        level_pairs = compute_leaf_pairs_by_level(tree, root_id)
+
+        merges_needed = total_t - target_topics
+        available_pairs = sum(len(pairs) for pairs in level_pairs.values())
+        to_merge = min(merges_needed, available_pairs)
+
+        if to_merge == 0:
+            break
+
+        pairs_to_merge = select_pairs_for_merge(level_pairs, num_pairs_needed=to_merge)
+        
+        if progress_callback:
+            progress_callback(f"Merging {len(pairs_to_merge)} pairs: {pairs_to_merge}")
+
+        copy_model.merge_topics(cleaned, pairs_to_merge)
+        total_t = total_topics(copy_model)
+      
+    return copy_model
+
+
+###############################################################################
+# Main Application
+###############################################################################
 st.sidebar.image("static/SNAP_logo.png", width=350)
 
 ###############################################################################
@@ -1310,6 +1452,25 @@ if st.session_state.view == "Power User Mode":
                 if run_clustering:
                     st.session_state.active_tab_index = tabs_titles.index("Clustering")
                     st.session_state['min_cluster_size'] = min_cluster_size_val
+                    
+                    # Complete cleanup when starting new clustering (fresh start)
+                    # Remove all previous topic models and reduction data
+                    cleanup_keys = [
+                        'topic_model', 'topics', 'probs', 'clustered_data',
+                        'clustering_texts_cleaned', 'clustering_embeddings',
+                        'intertopic_distance_fig', 'topic_document_fig', 'hierarchy_fig',
+                        'original_model_backup', 'reduction_applied', 'original_topic_count',
+                        'target_topics', 'topic_reduction_in_progress', 'topic_reduction_cancel',
+                        'clustering_completed'
+                    ]
+                    
+                    for key in cleanup_keys:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    
+                    # Reset topic reduction state to defaults
+                    st.session_state['topic_reduction_in_progress'] = False
+                    st.session_state['topic_reduction_cancel'] = {'cancel': False}
 
             # Decide which DataFrame is used based on the selection
             if clustering_option == 'Semantic Search Results':
@@ -1339,6 +1500,7 @@ if st.session_state.view == "Power User Mode":
                     text_columns
                 )
 
+                # Run clustering when button is pressed
                 if df_to_cluster is not None and embeddings is not None and not df_to_cluster.empty and run_clustering:
                     with st.spinner("Performing clustering..."):
                         # Clear any existing summary data when clustering is run
@@ -1437,6 +1599,8 @@ if st.session_state.view == "Power User Mode":
                                 # Store results if validation passes
                                 dfc['Topic'] = topics
                                 st.session_state['topic_model'] = topic_model
+                                st.session_state['topics'] = topics
+                                st.session_state['probs'] = probs
                                 st.session_state['clustered_data'] = dfc.copy()
                                 st.session_state['clustering_texts_cleaned'] = texts_cleaned
                                 st.session_state['clustering_embeddings'] = embeddings_for_clustering
@@ -1485,6 +1649,283 @@ if st.session_state.view == "Power User Mode":
                             st.session_state.active_tab_index = tabs_titles.index("Clustering")
                             st.stop()
 
+                # Display clustering results if they exist (outside run_clustering condition)
+                if st.session_state.get('clustering_completed', False):
+                    # st.subheader("Topic Overview")
+                    dfc = st.session_state['clustered_data']
+                    topic_model = st.session_state['topic_model']
+                    topics = dfc['Topic'].tolist()
+                    
+                    unique_topics = sorted(list(set(topics)))
+                    cluster_info = []
+                    for t in unique_topics:
+                        cluster_docs = dfc[dfc['Topic'] == t]
+                        count = len(cluster_docs)
+                        top_words = topic_model.get_topic(t)
+                        if top_words:
+                            top_keywords = ", ".join([w[0] for w in top_words[:5]])
+                        else:
+                            top_keywords = "N/A"
+                        cluster_info.append((t, count, top_keywords))
+                    cluster_df = pd.DataFrame(cluster_info, columns=["Topic", "Count", "Top Keywords"])
+
+                    # Topic Reduction (Recursive Merge) - moved above clustering results
+                    st.subheader("Reduce Topics")
+                    
+                    # Add explanation about topic reduction
+                    with st.expander("ℹ️ How Topic Reduction Works", expanded=False):
+                            st.markdown("""
+                            ### Understanding Topic Reduction
+                            
+                            Topic reduction uses a recursive merging approach to intelligently combine similar topics:
+                            
+                            1. **Hierarchical Analysis**: The system analyzes the hierarchical structure of topics
+                            2. **Deepest-First Merging**: Merges topics starting from the deepest level of the hierarchy
+                            3. **Iterative Process**: Continues merging until the target number of topics is reached
+                            4. **Preserved Original**: Your original topic model is preserved - all changes are made to a copy
+                            
+                            **Benefits**:
+                            - More intelligent merging compared to standard aggregation
+                            - Preserves topic coherence and semantic relationships
+                            - Allows restoration to original topics at any time
+                            - Provides detailed progress feedback during reduction
+                            """)
+                    
+                    try:
+                        current_topics = [t for t in st.session_state['clustered_data']['Topic'].unique().tolist() if t != -1]
+                        current_num_topics = len(current_topics)
+                    except Exception:
+                        current_num_topics = 0
+
+                    # Initialize session state variables for topic reduction (always, regardless of topic count)
+                    if 'topic_reduction_in_progress' not in st.session_state:
+                        st.session_state['topic_reduction_in_progress'] = False
+                    if 'topic_reduction_cancel' not in st.session_state:
+                        st.session_state['topic_reduction_cancel'] = {'cancel': False}
+                    if 'original_model_backup' not in st.session_state:
+                        st.session_state['original_model_backup'] = None
+                    if 'reduction_applied' not in st.session_state:
+                        st.session_state['reduction_applied'] = False
+                    if 'original_topic_count' not in st.session_state:
+                        try:
+                            current_topics = [t for t in st.session_state['clustered_data']['Topic'].unique().tolist() if t != -1]
+                            st.session_state['original_topic_count'] = len(current_topics)
+                        except Exception:
+                            st.session_state['original_topic_count'] = current_num_topics
+
+                    if current_num_topics >= 2:
+
+                            # Show current status
+                            if st.session_state.get('reduction_applied', False):
+                                original_count = st.session_state.get('original_topic_count', current_num_topics)
+                                st.info(f"Topics reduced from {original_count} to {current_num_topics}. Original model is preserved.")
+                            
+                            # Topic reduction form (following same pattern as clustering form)
+                            max_topics = st.session_state.get('original_topic_count', current_num_topics)
+                            with st.form("topic_reduction_form"):
+                                target_topics = st.slider(
+                                    "Target number of topics",
+                                    min_value=2,
+                                    max_value=max_topics,
+                                    value=st.session_state.get('target_topics', max_topics),
+                                    help="Reduce topics using recursive merging. The original topic model is preserved.",
+                                    disabled=st.session_state['topic_reduction_in_progress']
+                                )
+                                
+                                # Buttons - only disable if processing, not based on slider value
+                                col_r1, col_r2 = st.columns([1, 3])
+                                with col_r1:
+                                    reduce_button = st.form_submit_button(
+                                        "Reduce Topics",
+                                        disabled=st.session_state['topic_reduction_in_progress']
+                                    )
+                                with col_r2:
+                                    if st.session_state.get('reduction_applied', False):
+                                        restore_button = st.form_submit_button("Restore Original Topics", type="secondary")
+                                    else:
+                                        restore_button = False
+
+
+                            # Handle Restore
+                            if restore_button and st.session_state['original_model_backup']:
+                                # Restore original data and model
+                                st.session_state['topic_model'] = st.session_state['original_model_backup']['model']
+                                st.session_state['clustered_data'] = st.session_state['original_model_backup']['data']
+                                st.session_state['topics'] = st.session_state['original_model_backup']['topics']
+                                st.session_state['probs'] = st.session_state['original_model_backup']['probs']
+                                st.session_state['intertopic_distance_fig'] = st.session_state['original_model_backup']['intertopic_fig']
+                                st.session_state['topic_document_fig'] = st.session_state['original_model_backup']['topic_doc_fig']
+                                st.session_state['hierarchy_fig'] = st.session_state['original_model_backup']['hierarchy_fig']
+                                
+                                # Clean up reduction-related state (memory optimization)
+                                st.session_state['reduction_applied'] = False
+                                if 'original_topic_count' in st.session_state:
+                                    del st.session_state['original_topic_count']
+                                if 'target_topics' in st.session_state:
+                                    del st.session_state['target_topics']
+                                
+                                # Reset topic reduction controls to default state
+                                st.session_state['topic_reduction_in_progress'] = False
+                                st.session_state['topic_reduction_cancel'] = {'cancel': False}
+                                
+                                st.success("Original topics restored successfully! All intermediate data cleared.")
+                                st.rerun()
+
+                            # Handle Reduce
+                            if reduce_button and not st.session_state['topic_reduction_in_progress']:
+                                # Store the target_topics value and validate
+                                st.session_state['target_topics'] = target_topics
+                                
+                                # Validate that reduction is actually needed
+                                if target_topics >= current_num_topics:
+                                    st.error(f"Target topics ({target_topics}) must be less than current topics ({current_num_topics}). To perform reduction you should restore the original topics first.")
+                                    # st.stop()
+                                    st.session_state['topic_reduction_in_progress'] = False
+                                
+                                else:    
+                                    st.session_state['topic_reduction_in_progress'] = True
+                                    st.session_state['topic_reduction_cancel']['cancel'] = False
+
+                                    if not st.session_state['original_model_backup']:
+                                        st.session_state['original_model_backup'] = {
+                                            'model': copy.deepcopy(st.session_state['topic_model']),
+                                            'data': st.session_state['clustered_data'].copy(),
+                                            'topics': st.session_state['topics'].copy(),
+                                            'probs': st.session_state['probs'].copy(),
+                                            'intertopic_fig': st.session_state.get('intertopic_distance_fig'),
+                                            'topic_doc_fig': st.session_state.get('topic_document_fig'),
+                                            'hierarchy_fig': st.session_state.get('hierarchy_fig')
+                                        }
+                                        st.session_state['original_topic_count'] = current_num_topics
+
+                                    progress_container = st.container()
+                                    status_container = st.container()
+
+                                    with progress_container:
+                                        progress_bar = st.progress(0)
+                                        status_text = st.empty()
+
+                                    def progress_callback(message):
+                                        status_text.text(message)
+
+                                    try:
+                                        # Use current topic_model (more memory efficient than copying from backup)
+                                        copy_model = st.session_state['topic_model']
+                                        texts_cleaned = st.session_state['clustering_texts_cleaned']
+
+                                        status_text.text("Starting topic reduction...")
+                                        progress_bar.progress(10)
+
+                                        reduced_model = recursive_merge(
+                                            copy_model,
+                                            texts_cleaned,
+                                            target_topics,
+                                            progress_callback=progress_callback
+                                        )
+                                        
+                                        progress_bar.progress(50)
+                                        status_text.text("Updating topic assignments...")
+
+                                        df_reduced = st.session_state['clustered_data'].copy()
+                                        df_reduced['Topic'] = reduced_model.topics_
+
+                                        progress_bar.progress(70)
+                                        status_text.text("Regenerating visualizations...")
+
+                                        try:
+                                            intertopic_fig = reduced_model.visualize_topics()
+                                        except Exception:
+                                            intertopic_fig = None
+
+                                        try:
+                                            topic_doc_fig = reduced_model.visualize_documents(
+                                                texts_cleaned,
+                                                embeddings=st.session_state['clustering_embeddings']
+                                            )
+                                        except Exception:
+                                            topic_doc_fig = None
+
+                                        try:
+                                            hierarchy = reduced_model.hierarchical_topics(texts_cleaned)
+                                            hierarchy_fig = reduced_model.visualize_hierarchy()
+                                        except Exception:
+                                            hierarchy_fig = None
+
+                                        progress_bar.progress(90)
+                                        status_text.text("Finalizing changes...")
+
+                                        st.session_state['topic_model'] = reduced_model
+                                        st.session_state['clustered_data'] = df_reduced
+                                        st.session_state['topics'] = reduced_model.topics_
+                                        st.session_state['intertopic_distance_fig'] = intertopic_fig
+                                        st.session_state['topic_document_fig'] = topic_doc_fig
+                                        st.session_state['hierarchy_fig'] = hierarchy_fig
+                                        st.session_state['reduction_applied'] = True
+
+                                        progress_bar.progress(100)
+                                        status_text.text("Topic reduction completed!")
+                                        st.success(f"Successfully reduced topics from {current_num_topics} to {target_topics}!")
+                                        
+                                        # Update session state to ensure results are shown
+                                        st.session_state['clustering_completed'] = True
+
+                                    except Exception as e:
+                                        st.error(f"Topic reduction failed: {e}")
+                                        status_text.text("Topic reduction failed.")
+                                        progress_bar.progress(0)
+                                    finally:
+                                        st.session_state['topic_reduction_in_progress'] = False
+                                        # Trigger rerun to show updated results
+                                        st.rerun()
+                            else:
+                                st.info("See the results below.")
+
+                    st.write("### Topic Overview")
+                    st.dataframe(
+                        cluster_df,
+                        column_config={
+                            "Topic": st.column_config.NumberColumn("Topic", help="Topic ID (-1 represents outliers)"),
+                            "Count": st.column_config.NumberColumn("Count", help="Number of documents in this topic"),
+                            "Top Keywords": st.column_config.TextColumn(
+                                "Top Keywords",
+                                help="Top 5 keywords that characterize this topic"
+                            )
+                        },
+                        hide_index=True
+                    )
+
+                    # Display stored visualizations with error handling - Hierarchy first, then others
+                    st.write("### Topic Hierarchy")
+                    if st.session_state.get('hierarchy_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['hierarchy_fig'])
+                        except Exception:
+                            st.info("Topic hierarchy visualization is not available for the current clustering results.")
+
+                    st.write("### Intertopic Distance Map")
+                    if st.session_state.get('intertopic_distance_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['intertopic_distance_fig'])
+                        except Exception:
+                            st.info("Topic visualization is not available for the current clustering results.")
+
+                    st.write("### Topic Document Visualization")
+                    if st.session_state.get('topic_document_fig') is not None:
+                        try:
+                            st.plotly_chart(st.session_state['topic_document_fig'])
+                        except Exception:
+                            st.info("Document visualization is not available for the current clustering results.")
+                
+                    # Clustering Results and Visualizations
+                        st.subheader("Clustering Results")
+                        columns_to_display = [c for c in dfc.columns if c != 'text']
+                        st.dataframe(dfc[columns_to_display], hide_index=True)
+                        
+                # Display results when clustering exists but run_clustering was not pressed (e.g., after topic reduction)
+                elif st.session_state.get('clustering_completed', False):
+                    # Show the clustering results section even when run_clustering is False
+                    # This ensures topic reduction results are displayed
+                    
                     # Display clustering results if they exist
                     if st.session_state.get('clustering_completed', False):
                         st.subheader("Topic Overview")
@@ -1519,11 +1960,14 @@ if st.session_state.view == "Power User Mode":
                             hide_index=True
                         )
 
-                        st.subheader("Clustering Results")
-                        columns_to_display = [c for c in dfc.columns if c != 'text']
-                        st.dataframe(dfc[columns_to_display], hide_index=True)
+                        # Display stored visualizations with error handling - Hierarchy first, then others
+                        st.write("### Topic Hierarchy")
+                        if st.session_state.get('hierarchy_fig') is not None:
+                            try:
+                                st.plotly_chart(st.session_state['hierarchy_fig'])
+                            except Exception:
+                                st.info("Topic hierarchy visualization is not available for the current clustering results.")
 
-                        # Display stored visualizations with error handling
                         st.write("### Intertopic Distance Map")
                         if st.session_state.get('intertopic_distance_fig') is not None:
                             try:
@@ -1538,16 +1982,13 @@ if st.session_state.view == "Power User Mode":
                             except Exception:
                                 st.info("Document visualization is not available for the current clustering results.")
 
-                        st.write("### Topic Hierarchy")
-                        if st.session_state.get('hierarchy_fig') is not None:
-                            try:
-                                st.plotly_chart(st.session_state['hierarchy_fig'])
-                            except Exception:
-                                st.info("Topic hierarchy visualization is not available for the current clustering results.")
-                if not (df_to_cluster is not None and embeddings is not None and not df_to_cluster.empty and run_clustering):
-                    pass
-        else:
-            st.warning("Please select or upload a dataset and filter as needed.")
+                        # Clustering Results and Visualizations
+                        st.subheader("Clustering Results")
+                        columns_to_display = [c for c in dfc.columns if c != 'text']
+                        st.dataframe(dfc[columns_to_display], hide_index=True)
+                
+                else:
+                    st.warning("Please select or upload a dataset and filter as needed.")
 
 
     ###############################################################################
